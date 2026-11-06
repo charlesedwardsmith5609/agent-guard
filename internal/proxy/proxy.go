@@ -32,6 +32,9 @@ type Config struct {
 	StreamIdle           time.Duration // 60s: max silence on an upstream body
 	WriteTimeout         time.Duration // 30s: deadline for each write to the client
 	BodyTimeout          time.Duration // 30s: deadline for reading the request body
+
+	MaxInflightRequests int           // 64: concurrent inspected requests; more get 503
+	MaxResponseDuration time.Duration // 10m: absolute limit on one upstream exchange
 }
 
 func (c *Config) applyDefaults() {
@@ -47,6 +50,9 @@ func (c *Config) applyDefaults() {
 	if c.MaxInflightDecisions <= 0 {
 		c.MaxInflightDecisions = 64
 	}
+	if c.MaxInflightRequests <= 0 {
+		c.MaxInflightRequests = 64
+	}
 	for _, p := range []struct {
 		v *time.Duration
 		d time.Duration
@@ -56,6 +62,7 @@ func (c *Config) applyDefaults() {
 		{&c.StreamIdle, 60 * time.Second},
 		{&c.WriteTimeout, 30 * time.Second},
 		{&c.BodyTimeout, 30 * time.Second},
+		{&c.MaxResponseDuration, 10 * time.Minute},
 	} {
 		if *p.v <= 0 {
 			*p.v = p.d
@@ -63,12 +70,15 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// Proxy is an http.Handler. All fields are immutable after New.
+// Proxy is an http.Handler. All fields are immutable after New. The only shared mutable object
+// is sem, a channel used as a counting semaphore: a request goroutine acquires a slot without
+// blocking and releases it when it returns.
 type Proxy struct {
 	cfg    Config
 	guard  *guard
 	client *http.Client
 	log    *slog.Logger
+	sem    chan struct{}
 }
 
 // New validates cfg and returns a Proxy.
@@ -84,6 +94,7 @@ func New(cfg Config) (*Proxy, error) {
 	cfg.Upstream = &u
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = cfg.UpstreamTimeout
+	tr.MaxConnsPerHost = cfg.MaxInflightRequests
 	lg := cfg.Logger
 	if lg == nil {
 		lg = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -93,6 +104,7 @@ func New(cfg Config) (*Proxy, error) {
 		guard:  newGuard(cfg.Decider, cfg.DecideTimeout, cfg.MaxInflightDecisions),
 		client: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		log:    lg,
+		sem:    make(chan struct{}, cfg.MaxInflightRequests),
 	}, nil
 }
 
@@ -104,20 +116,32 @@ const (
 // ServeHTTP implements http.Handler.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
+	// The read deadline starts before routing so that even rejected requests cannot hold the
+	// connection by trickling a body.
+	setDeadline(rc.SetReadDeadline, p.cfg.BodyTimeout)
 	if r.Method != http.MethodPost || (r.URL.Path != pathMessages && r.URL.Path != pathCount) {
+		w.Header().Set("Connection", "close")
 		setDeadline(rc.SetWriteDeadline, p.cfg.WriteTimeout)
 		http.NotFound(w, r)
 		return
 	}
-	setDeadline(rc.SetReadDeadline, p.cfg.BodyTimeout)
+	select {
+	case p.sem <- struct{}{}:
+		defer func() { <-p.sem }()
+	default:
+		p.reject(w, rc, http.StatusServiceUnavailable, "too many requests in flight")
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, p.cfg.MaxBody))
-	_ = rc.SetReadDeadline(time.Time{})
+	if err == nil {
+		_ = rc.SetReadDeadline(time.Time{}) // on error the deadline stays so draining cannot hang
+	}
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			p.fail(w, rc, http.StatusRequestEntityTooLarge, "request body too large")
+			p.reject(w, rc, http.StatusRequestEntityTooLarge, "request body too large")
 		} else {
-			p.fail(w, rc, http.StatusBadRequest, "could not read request body")
+			p.reject(w, rc, http.StatusBadRequest, "could not read request body")
 		}
 		return
 	}
@@ -131,7 +155,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), p.cfg.MaxResponseDuration)
 	defer cancel()
 	resp, err := p.forward(ctx, r, body)
 	if err != nil {
@@ -207,6 +231,13 @@ func (p *Proxy) serveJSON(ctx context.Context, w http.ResponseWriter, rc *http.R
 		return
 	}
 	p.writeBuffered(w, rc, resp, out)
+}
+
+// reject is fail for requests whose body may be unread: the connection is closed afterwards so
+// the server does not wait to drain it.
+func (p *Proxy) reject(w http.ResponseWriter, rc *http.ResponseController, status int, msg string) {
+	w.Header().Set("Connection", "close")
+	p.fail(w, rc, status, msg)
 }
 
 // fail sends a proxy-generated JSON error under a write deadline.
