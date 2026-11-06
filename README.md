@@ -24,10 +24,13 @@ SDK and the stdout exporter), plus their transitive modules. MIT licensed.
 Pre-1.0. The behaviour described here is covered by automated tests that run the real code over
 real loopback sockets against fake upstreams, including the documented Anthropic streaming event
 format. It has also been run against the **live Anthropic API** with a small model, streaming and
-non-streaming (`scripts/live-test.sh`, 17 checks: allow, ask and block decisions, prompt-injection
-shaped input, `count_tokens`, upstream errors, and that the API key never reaches the audit log or
-the proxy log). It has **not** been tried with a live Claude Code session, so expect rough edges
-when you first point a real agent at it.
+non-streaming (`scripts/live-test.sh`, 17 checks), and with a **real Claude Code session**
+(`scripts/live-claude-test.sh`, 7 checks, Claude Code 2.1.319): allowed, asked and blocked calls,
+a response mixing allowed and blocked calls, and the API key staying out of the logs.
+
+That is still narrow: one small model, Claude Code in headless mode (`-p`) with only the `Read` and
+`Bash` tools, short sessions. The interactive interface, other tools (`Write`, `Edit`, `WebFetch`,
+sub-agents, MCP), extended thinking and long sessions have not been tried, so expect rough edges.
 
 ## What it supports
 
@@ -92,8 +95,16 @@ The notice never repeats the tool name or its arguments. If every tool call in a
 replaced, a `stop_reason` of `tool_use` becomes `end_turn`, so the harness does not wait for
 results that will never come.
 
-**ASK is a notice, not an approval flow.** The call is not executed, and nothing waits for you.
-The model, or you, can react to the notice. There is no out-of-band approval channel.
+**ASK is a notice, not an approval flow.** The call is not executed and nothing waits for you.
+There is no out-of-band approval channel.
+
+**What happens next depends on the rest of the response** (observed with Claude Code):
+
+- If *every* tool call in a response is replaced, the turn ends: the notice is shown as the
+  assistant's final message, and the model does not get to react until your next message.
+- If at least one call in the response is allowed, the agent runs it, and the notice sits in the
+  same message, so the model sees it on its next step. In testing it reported the block accurately
+  and did not try to work around it.
 
 **Fail closed.** Anything unexpected blocks the call: a policy error, tool input that cannot be
 parsed, a decision that takes too long, a malformed or oversized upstream response, an SSE event

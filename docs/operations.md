@@ -82,7 +82,10 @@ requested uncompressed so they can be inspected.
 
 A tool call that is not allowed is replaced, at the same position, by a text block. The exact
 text is in the [README](../README.md#how-decisions-work). If no tool call survives and the
-`stop_reason` was `tool_use`, it is changed to `end_turn`.
+`stop_reason` was `tool_use`, it is changed to `end_turn`. Consequently a response whose calls were
+*all* replaced ends the agent's turn: the notice is the assistant's last message and the model only
+sees it when you send the next one. A response that still contains an allowed call continues
+normally, with the notice next to it in the same message.
 
 ### Streaming
 

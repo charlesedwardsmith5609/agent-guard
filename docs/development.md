@@ -30,6 +30,12 @@ and never printed. Models are not deterministic, so a failure can be the model r
 input; run it again before assuming a proxy bug. Point `LIVE_UPSTREAM` at a local imitation to
 exercise the script itself without spending anything.
 
+`scripts/live-claude-test.sh` does the same with a real Claude Code session (needs the `claude`
+CLI; well under a cent). Claude Code runs in a throwaway directory with an isolated config
+(`--bare`, `CLAUDE_CONFIG_DIR`), only the `Read` and `Bash` tools, and **without**
+`--dangerously-skip-permissions`, so Claude Code itself still refuses `Bash`; the checks assert on
+what the proxy recorded. It uses the same key file or `ANTHROPIC_API_KEY`.
+
 ## Layout
 
 | Path | Contents |

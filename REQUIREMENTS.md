@@ -76,5 +76,6 @@ during that time without asking, and are the ones most worth reviewing.
 - An optional judge model for ambiguous calls (this idea came from reading the public
   `huggingface/safeagents` README for context; none of its code was used).
 - An OTLP exporter, log rotation, hot reload of the policy, Windows support for the audit log.
-- Validation with a real Claude Code session. (The live Anthropic API has been exercised with
-  `scripts/live-test.sh`.)
+- Broader live validation. The live API (`scripts/live-test.sh`) and a headless Claude Code session
+  with the `Read` and `Bash` tools (`scripts/live-claude-test.sh`) have been exercised; the
+  interactive interface, other tools, extended thinking and long sessions have not.
