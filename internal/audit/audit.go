@@ -54,10 +54,23 @@ var (
 	errFull   = errors.New("audit: queue is full")
 )
 
+// Claim states of an item. The writer claims a record before writing it; a caller whose context
+// expires first cancels it instead, so a record the proxy has given up on is never written.
+const (
+	itemQueued int32 = iota
+	itemClaimed
+	itemCancelled
+)
+
+// claimGrace is how long a caller whose context expired waits for a write that has already
+// started, so the log and the proxy's final decision agree.
+var claimGrace = 2 * time.Second
+
 // item is one queued record with the channel the writer answers on.
 type item struct {
-	rec Record
-	ack chan error // capacity 1: the writer never blocks on it
+	rec   Record
+	ack   chan error // capacity 1: the writer never blocks on it
+	state atomic.Int32
 }
 
 // Logger implements policy.Observer.
@@ -74,7 +87,7 @@ type Logger struct {
 
 	mu     sync.RWMutex
 	closed bool
-	queue  chan item
+	queue  chan *item
 
 	failed    atomic.Bool
 	done      chan struct{}
@@ -87,6 +100,9 @@ type Logger struct {
 // regular file that is not accessible to group or others (permissions on a file the logger did
 // not create are never changed).
 func Open(path string, opt Options) (*Logger, error) {
+	if !safeOpenSupported {
+		return nil, errors.New("audit: opening the log without following symlinks is only supported on Unix")
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_EXCL|noFollow, 0o600)
 	if errors.Is(err, fs.ErrExist) {
 		f, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND|noFollow|nonBlock, 0)
@@ -125,7 +141,7 @@ func newLogger(w io.Writer, opt Options) *Logger {
 	if opt.QueueSize <= 0 {
 		opt.QueueSize = defaultQueue
 	}
-	l := &Logger{opt: opt, out: w, queue: make(chan item, opt.QueueSize), done: make(chan struct{})}
+	l := &Logger{opt: opt, out: w, queue: make(chan *item, opt.QueueSize), done: make(chan struct{})}
 	go l.run()
 	return l
 }
@@ -138,7 +154,7 @@ func (l *Logger) Observe(ctx context.Context, e policy.Event) error {
 	if l.failed.Load() {
 		return errFailed
 	}
-	it := item{rec: l.record(e), ack: make(chan error, 1)}
+	it := &item{rec: l.record(e), ack: make(chan error, 1)}
 	l.mu.RLock()
 	if l.closed {
 		l.mu.RUnlock()
@@ -155,6 +171,17 @@ func (l *Logger) Observe(ctx context.Context, e policy.Event) error {
 	case err := <-it.ack:
 		return err
 	case <-ctx.Done():
+	}
+	if it.state.CompareAndSwap(itemQueued, itemCancelled) {
+		return ctx.Err() // not written, and never will be
+	}
+	// The writer already claimed it: its outcome decides, so wait briefly for it.
+	grace := time.NewTimer(claimGrace)
+	defer grace.Stop()
+	select {
+	case err := <-it.ack:
+		return err
+	case <-grace.C:
 		return ctx.Err()
 	}
 }
@@ -182,6 +209,9 @@ func (l *Logger) run() {
 	defer close(l.done)
 	enc := json.NewEncoder(l.out)
 	for it := range l.queue {
+		if !it.state.CompareAndSwap(itemQueued, itemClaimed) {
+			continue // cancelled by a caller that gave up; nothing to write or answer
+		}
 		if l.failed.Load() {
 			it.ack <- errFailed // keep draining so the queue cannot fill behind a broken sink
 			continue
@@ -196,8 +226,9 @@ func (l *Logger) run() {
 }
 
 // Close stops accepting records, writes what is queued, and closes the destination (once). If the
-// writer is still blocked when ctx expires, the destination is closed to interrupt it, the
-// context error is returned, and the writer goroutine ends when its write returns.
+// writer is still blocked when ctx expires, the destination is closed to try to interrupt it and
+// the context error is returned. Go cannot interrupt a Write that is stuck in the kernel or in a
+// custom io.Writer: the writer goroutine then ends only when that Write returns.
 func (l *Logger) Close(ctx context.Context) error {
 	l.mu.Lock()
 	if !l.closed {

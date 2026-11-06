@@ -41,7 +41,7 @@ The proxy refuses to start without a valid policy and a writable, private audit 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `-config` | required | YAML policy file |
-| `-audit-log` | required | JSONL audit file (created 0600; an existing file must already be 0600) |
+| `-audit-log` | required | JSONL audit file (created 0600; an existing file must already be 0600). Unix only: the proxy refuses to start elsewhere |
 | `-audit-preview` | `true` | include a redacted argument preview (`false` records only the hash) |
 | `-otel` | `none` | `stdout` writes spans as JSON to stderr |
 | `-listen` | `127.0.0.1:8787` | address to listen on. **There is no authentication**; keep it on loopback |

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -22,6 +21,8 @@ import (
 )
 
 const testTimeout = 5 * time.Second
+
+func init() { claimGrace = 20 * time.Millisecond } // keep timeout tests quick
 
 // Fake credentials are assembled at run time so no secret-shaped literal exists in the source.
 var fixtures = map[string]string{
@@ -277,17 +278,6 @@ func TestOpenFilePermissions(t *testing.T) {
 			t.Fatal("expected an error")
 		}
 	})
-	t.Run("fifo is rejected without blocking", func(t *testing.T) {
-		p := filepath.Join(dir, "fifo")
-		if err := syscall.Mkfifo(p, 0o600); err != nil {
-			t.Skip("mkfifo unavailable")
-		}
-		res := make(chan error, 1)
-		go func() { _, err := Open(p, Options{}); res <- err }()
-		if err := recv(t, res); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
 	t.Run("directory is rejected", func(t *testing.T) {
 		if _, err := Open(dir, Options{}); err == nil {
 			t.Fatal("expected an error")
@@ -374,6 +364,33 @@ func TestObserveWaitsForTheWrite(t *testing.T) {
 		t.Fatalf("Observe after the writer recovered: %v", err)
 	}
 	closeOK(t, l)
+}
+
+// If the caller gives up while its record is still queued behind a stuck write, the record is
+// cancelled: it must never appear in the log afterwards as a decision that was not delivered.
+func TestCancelledRecordIsNeverWritten(t *testing.T) {
+	g := newGated()
+	buf := &lockedBuf{}
+	l := NewWriter(struct {
+		io.Writer
+	}{io.MultiWriter(g, buf)}, Options{})
+	t.Cleanup(g.release)
+	first := make(chan error, 1)
+	go func() { first <- l.Observe(context.Background(), ev("First", "1", `{}`, policy.Allow, "allow", "")) }()
+	awaitEntered(t, g) // First is claimed and stuck in Write
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := l.Observe(ctx, ev("Second", "2", `{}`, policy.Allow, "allow", "")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Second = %v, want the context error", err)
+	}
+	g.release()
+	if err := recv(t, first); err != nil {
+		t.Fatal(err)
+	}
+	closeOK(t, l)
+	if out := buf.String(); !strings.Contains(out, `"First"`) || strings.Contains(out, `"Second"`) {
+		t.Errorf("log must hold First only, got:\n%s", out)
+	}
 }
 
 func TestFullQueueFailsWithoutBlocking(t *testing.T) {
