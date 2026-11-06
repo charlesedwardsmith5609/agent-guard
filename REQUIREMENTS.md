@@ -45,6 +45,29 @@ Each phase gets its own `plans/step-N.md` and plan review. No phase starts witho
 9. **Audit log:** SHA-256 of the arguments plus a redacted, truncated preview. Never API keys or
    full bodies.
 
+## Decisions made unattended in Phases 3 and 4 (human to review) [ASSUMED]
+10. **Rule combination:** every rule is evaluated; the strictest verdict wins (BLOCK over ASK over
+    ALLOW). The first rule in evaluation order that produced that verdict is the matched rule.
+11. **Config:** `tools`, `hosts` (exact or `*.suffix`), `paths.workdir`, `paths.allow`
+    (directory prefixes), and `sensitive.<class>` = `ask|block` (default `ask`) for the classes
+    `proc_environ`, `ssh`, `dotenv`, `metadata`. Unknown keys are an error. `-config` is required.
+12. **Path scope** applies to structured path arguments only (`file_path`, `path`, ...). Shell
+    command text gets sensitive-path and host checks but no scope check, because absolute paths
+    like `/usr/bin/git` would make scope checks unusable. Sensitive checks cover any access, not
+    only reads (a shell command cannot be classified reliably).
+13. **Host mention** in the user prompt is a whole-token, case-insensitive match against
+    user-role text. Mention never overrides a sensitive-class rule (metadata endpoint).
+14. **Audit failure fails closed:** if the audit record cannot be queued or the writer has failed,
+    an ALLOW becomes BLOCK (`fail-closed:audit`).
+15. **OpenTelemetry:** API + SDK + stdout trace exporter only. OTLP is not added (optional in
+    decision 4); it can follow later.
+16. **Audit file:** JSONL, mode 0600, append-only, one writer goroutine.
+
+17. **Required keys and tool patterns:** `tools`, `hosts`, `paths.allow` are mandatory (empty list
+    allows nothing). Tool patterns may end in `*` (prefix of 3+ characters) for MCP names.
+18. **Host detection is heuristic:** URLs, `user@host:`, network-command arguments, and tokens
+    whose last label is in a built-in common-TLD list.
+
 ## Deferred (not in scope)
 - Optional judge model for ambiguous calls (outside the four phases).
 - Approval endpoint or CLI for ASK.
