@@ -94,3 +94,12 @@ tracer provider's `Shutdown(ctx)` (flushes spans), all under one shared deadline
 
 ## Check
 `bash scripts/check.sh`, per stage.
+
+## Addendum: cross-review outcomes
+- `Setup("stdout", nil)` is rejected (a nil writer would panic the exporter later).
+- Tool names, tool_use ids and rule names go through `audit.RedactID` (character allow-list, then
+  credential-shape redaction) before they are recorded or exported.
+- Accepted limit: an `io.Writer` that blocks cannot be interrupted, so a stuck stdout/stderr sink
+  makes the batch exporter drop spans once its bounded queue fills; shutdown honours its context.
+- Test fixtures that look like credentials are assembled at run time, so no secret-shaped literal
+  exists in the repository (a secret scan is part of publishing).
