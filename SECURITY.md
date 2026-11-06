@@ -23,9 +23,10 @@ protection are welcome; reports that restate a documented limit are not needed.
 
 ## How to report
 
-Private vulnerability reporting is not enabled on this repository yet. Until it is, please open an
-issue titled "Security contact request" that says **only** that you have a security report, with no
-technical details, and a way to reach you will be arranged. Do not post exploit details publicly.
+Use GitHub's private vulnerability reporting: open the repository's **Security** tab and choose
+**Report a vulnerability**. Include what you did, what you expected, and what happened (a failing
+test or a minimal request that shows the problem is ideal). Please do not post exploit details in
+public issues.
 
 ## Supported versions
 
