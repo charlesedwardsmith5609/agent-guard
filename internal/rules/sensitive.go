@@ -19,7 +19,8 @@ func (e *Engine) pathClass(p string) string {
 	p = e.expandHome(p)
 	forms := []string{path.Clean(p)}
 	if !strings.HasPrefix(p, "/") {
-		forms = []string{path.Clean(strings.TrimPrefix(p, "./")), path.Clean(e.workdir + "/" + p)}
+		// As written, against workdir, and against / (the shell may have done `cd /`).
+		forms = []string{path.Clean(strings.TrimPrefix(p, "./")), path.Clean(e.workdir + "/" + p), path.Clean("/" + p)}
 	}
 	for _, f := range forms {
 		if c := classifyClean(f); c != "" {

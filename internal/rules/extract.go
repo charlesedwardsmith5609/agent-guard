@@ -15,11 +15,14 @@ const (
 	maxDepth      = 16
 	maxHosts      = 256  // distinct hosts per call; more is an error (fail closed)
 	maxCandidates = 1024 // distinct path-like tokens per call
+	ctxEvery      = 256  // tokens between cancellation checks
 )
+
+var errTooMany = errors.New("tool input refers to too many distinct hosts or paths")
 
 // extracted is what a tool call's input refers to.
 type extracted struct {
-	hosts      []string // lower-case; IPv4 literals in canonical dotted form
+	hosts      []string // lower-case; numeric IPv4 spellings in canonical dotted form
 	candidates []string // path-like tokens, for sensitive checks
 	structured []string // values of known path keys, for scope checks
 }
@@ -35,40 +38,67 @@ var (
 	ipv4Re = regexp.MustCompile(`(?:^|[^0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:$|[^0-9.])`)
 )
 
-// Commands whose bare arguments are network destinations.
+// Commands whose operands are network destinations.
 var netCommands = map[string]bool{
 	"curl": true, "wget": true, "ssh": true, "scp": true, "sftp": true, "nc": true, "ncat": true,
 	"netcat": true, "telnet": true, "ftp": true, "rsync": true, "ping": true, "dig": true,
 	"nslookup": true, "host": true, "traceroute": true, "mtr": true, "socat": true, "http": true, "https": true,
 }
 
-// Last labels that make a bare token look like a hostname. File-like names (sh, py, rs, md, in,
-// cc, ...) are deliberately absent so main.py or Makefile.in are not mistaken for hosts.
-var tlds = map[string]bool{}
+// For these, a bare dotted operand is a local file; only host:path and user@host forms count.
+var localFileCommands = map[string]bool{"scp": true, "rsync": true, "sftp": true}
 
-func init() {
-	for _, t := range strings.Fields(`com net org io dev ai app cloud xyz info biz co us uk de fr ru cn jp
-		br au ca nl se eu tv ly gg onion internal local`) {
-		tlds[t] = true
-	}
+// Options whose next token is a value (a file, header, method...) and never a destination.
+var valueOptions = map[string]map[string]bool{
+	"curl": setOf("-o", "--output", "-T", "--upload-file", "-F", "--form", "-d", "--data", "--data-raw",
+		"--data-binary", "-H", "--header", "-A", "--user-agent", "-b", "--cookie", "-c", "--cookie-jar",
+		"-K", "--config", "-w", "--write-out", "-X", "--request", "-e", "--referer", "-u", "--user",
+		"-m", "--max-time", "-D", "--dump-header"),
+	"wget": setOf("-O", "--output-document", "-o", "--output-file", "-P", "--directory-prefix",
+		"-i", "--input-file", "-t", "--tries", "-T", "--timeout", "-w", "--wait"),
 }
 
-// Endings that mark a dotted token as a file name, not a host, inside a network command
-// (curl -o out.txt, wget file.zip).
-var fileExts = map[string]bool{}
-
-func init() {
-	for _, t := range strings.Fields(`txt json zip tar gz tgz bz2 xz md log yaml yml toml html htm csv png jpg
-		jpeg gif svg pdf py go js ts rs c h cpp hpp sh rb out bin so conf cfg ini xml sql lock sum mod
-		java kt swift php pl lua exe dll dmg deb rpm whl jar war`) {
-		fileExts[t] = true
+func setOf(v ...string) map[string]bool {
+	m := make(map[string]bool, len(v))
+	for _, s := range v {
+		m[s] = true
 	}
+	return m
+}
+
+// Last labels that make a dotted token look like a hostname anywhere in a command line.
+// File-like names (sh, py, rs, md, in, cc, ...) are deliberately absent so main.py or Makefile.in
+// are not mistaken for hosts; inside a network command every dotted operand is a host anyway.
+var tlds = setOf(strings.Fields(`com net org io dev ai app cloud xyz info biz co us uk de fr ru cn jp
+	br au ca nl se eu tv ly gg onion internal local`)...)
+
+// uniq is an insertion-ordered set with a cap, so memory stays bounded while collecting.
+type uniq struct {
+	seen map[string]struct{}
+	list []string
+	max  int
+}
+
+func newUniq(max int) *uniq { return &uniq{seen: map[string]struct{}{}, max: max} }
+
+// add returns false when the set is full and s is new.
+func (u *uniq) add(s string) bool {
+	if _, ok := u.seen[s]; ok {
+		return true
+	}
+	if len(u.list) >= u.max {
+		return false
+	}
+	u.seen[s] = struct{}{}
+	u.list = append(u.list, s)
+	return true
 }
 
 type walker struct {
-	ctx   context.Context
-	out   extracted
-	bytes int
+	ctx                      context.Context
+	hosts, cands, structured *uniq
+	bytes                    int
+	err                      error
 }
 
 func extract(ctx context.Context, input []byte) (extracted, error) {
@@ -82,21 +112,11 @@ func extract(ctx context.Context, input []byte) (extracted, error) {
 	if _, ok := v.(map[string]any); !ok {
 		return extracted{}, errors.New("tool input is not a JSON object")
 	}
-	w := &walker{ctx: ctx}
+	w := &walker{ctx: ctx, hosts: newUniq(maxHosts), cands: newUniq(maxCandidates), structured: newUniq(maxCandidates)}
 	if err := w.walk(v, "", 0); err != nil {
 		return extracted{}, err
 	}
-	var err error
-	if w.out.hosts, err = dedupe(w.out.hosts, maxHosts); err != nil {
-		return extracted{}, err
-	}
-	if w.out.candidates, err = dedupe(w.out.candidates, maxCandidates); err != nil {
-		return extracted{}, err
-	}
-	if w.out.structured, err = dedupe(w.out.structured, maxCandidates); err != nil {
-		return extracted{}, err
-	}
-	return w.out, nil
+	return extracted{hosts: w.hosts.list, candidates: w.cands.list, structured: w.structured.list}, nil
 }
 
 func (w *walker) walk(v any, key string, depth int) error {
@@ -131,7 +151,13 @@ func (w *walker) walk(v any, key string, depth int) error {
 		}
 		w.scan(key, t)
 	}
-	return nil
+	return w.err
+}
+
+func (w *walker) fail(err error) {
+	if w.err == nil {
+		w.err = err
+	}
 }
 
 func (w *walker) addHost(h string) {
@@ -142,13 +168,23 @@ func (w *walker) addHost(h string) {
 	if ip, ok := looseIPv4(h); ok {
 		h = ip
 	}
-	w.out.hosts = append(w.out.hosts, h)
+	if !w.hosts.add(h) {
+		w.fail(errTooMany)
+	}
+}
+
+func (w *walker) addCandidate(p string) {
+	if !w.cands.add(p) {
+		w.fail(errTooMany)
+	}
 }
 
 func (w *walker) scan(key, s string) {
 	if pathKeys[strings.ToLower(key)] && s != "" {
-		w.out.structured = append(w.out.structured, s)
-		w.out.candidates = append(w.out.candidates, s)
+		if !w.structured.add(s) {
+			w.fail(errTooMany)
+		}
+		w.addCandidate(s)
 	}
 	for _, m := range urlRe.FindAllStringSubmatch(s, -1) {
 		w.addHost(authorityHost(m[1]))
@@ -160,50 +196,119 @@ func (w *walker) scan(key, s string) {
 		w.addHost(m[1])
 	}
 
-	netCtx, gitCtx := false, false
-	for _, tok := range tokenize(s) {
+	var (
+		netCmd      string // the network command whose operands we are reading
+		gitCtx      bool
+		skipNext    bool
+		operandSeen bool
+	)
+	for i, tok := range tokenize(s) {
+		if i%ctxEvery == 0 {
+			if err := w.ctx.Err(); err != nil {
+				w.fail(err)
+				return
+			}
+		}
+		if w.err != nil {
+			return
+		}
 		if tok == "" { // separator: a new command begins
-			netCtx, gitCtx = false, false
+			netCmd, gitCtx, skipNext, operandSeen = "", false, false, false
 			continue
 		}
 		base := tok
-		if i := strings.LastIndexByte(base, '/'); i >= 0 && i < len(base)-1 {
-			base = base[i+1:]
+		if j := strings.LastIndexByte(base, '/'); j >= 0 && j < len(base)-1 {
+			base = base[j+1:]
+		}
+		if skipNext {
+			skipNext = false
+			continue
 		}
 		if netCommands[base] {
-			netCtx = true
+			netCmd, operandSeen = base, false
 			continue
 		}
 		if base == "git" {
 			gitCtx = true
 			continue
 		}
+		if netCmd != "" && valueOptions[netCmd][tok] {
+			skipNext = true
+			continue
+		}
 		if looksLikePath(tok) {
-			w.out.candidates = append(w.out.candidates, tok)
+			w.addCandidate(tok)
 		}
 		if strings.Contains(tok, "://") {
 			continue // handled by urlRe
 		}
-		if ip, ok := looseIPv4(tok); ok && ip == metadataIP {
-			w.out.hosts = append(w.out.hosts, ip)
+		if ip, ok := numericIPv4(tok); ok && (netCmd != "" || ip == metadataIP) {
+			w.addHost(ip)
 			continue
 		}
-		if h, ok := hostToken(tok); ok {
-			last := h[strings.LastIndexByte(h, '.')+1:]
-			switch {
-			case tlds[last]:
-				w.addHost(h)
-			case netCtx && !fileExts[last] && !allDigits(last):
-				w.addHost(h)
-			case gitCtx && strings.Contains(tok, ":") && !fileExts[last] && !allDigits(last):
-				w.addHost(h) // git clone evil.example:org/repo.git
+
+		hasColon := strings.Contains(tok, ":")
+		parts := strings.Split(tok, ":")
+		for pi, part := range parts {
+			if part == "" || allDigits(part) {
+				continue // empty or a port
 			}
-		} else if netCtx && !strings.HasPrefix(tok, "-") {
-			if h, ok := bareHost(tok); ok {
-				w.addHost(h)
+			if ip, ok := numericIPv4(part); ok {
+				if netCmd != "" || ip == metadataIP {
+					w.addHost(ip)
+				}
+				continue
+			}
+			if h, ok := hostToken(part); ok {
+				last := h[strings.LastIndexByte(h, '.')+1:]
+				switch {
+				case tlds[last]:
+					w.addHost(h)
+				case netCmd != "" && (!localFileCommands[netCmd] || hasColon):
+					w.addHost(h)
+				case gitCtx && hasColon && pi == 0:
+					w.addHost(h) // git clone evil.example:org/repo.git
+				}
+				operandSeen = true
+				continue
+			}
+			// Dotless names: localhost, internal-svc, user@host.
+			if netCmd != "" && !strings.HasPrefix(part, "-") {
+				if h, ok := bareHost(part); ok && (h == "localhost" || !operandSeen || strings.Contains(part, "@")) {
+					w.addHost(h)
+					operandSeen = true
+				}
 			}
 		}
 	}
+}
+
+// numericIPv4 recognises an address spelled as an integer or dotted numeric parts. A lone small
+// number (a port, a count) is not an address.
+func numericIPv4(tok string) (string, bool) {
+	ip, ok := looseIPv4(tok)
+	if !ok {
+		return "", false
+	}
+	if !strings.Contains(tok, ".") && !isBigInt(tok) {
+		return "", false
+	}
+	return ip, true
+}
+
+func isBigInt(tok string) bool {
+	return allDigitsOrHex(tok) && len(tok) >= 8
+}
+
+func allDigitsOrHex(s string) bool {
+	s = strings.TrimPrefix(strings.ToLower(s), "0x")
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func allDigits(s string) bool {
@@ -263,7 +368,8 @@ func tokenize(s string) []string {
 }
 
 func looksLikePath(t string) bool {
-	if strings.HasPrefix(t, "/") || strings.HasPrefix(t, "~") || strings.HasPrefix(t, "./") || strings.HasPrefix(t, "../") || t == ".." {
+	if strings.HasPrefix(t, "/") || strings.HasPrefix(t, "~") || strings.HasPrefix(t, "./") ||
+		strings.HasPrefix(t, "../") || t == ".." || strings.HasPrefix(t, "proc/") {
 		return true
 	}
 	for _, seg := range strings.Split(t, "/") {
@@ -274,14 +380,10 @@ func looksLikePath(t string) bool {
 	return false
 }
 
-// hostToken reports whether t (optionally with a :port or /path suffix) is a dotted hostname.
+// hostToken reports whether t (optionally followed by /path, ?query or #fragment) is a dotted
+// hostname. user@host.com is an email address and does not qualify.
 func hostToken(t string) (string, bool) {
 	if i := strings.IndexAny(t, "/?#"); i >= 0 {
-		t = t[:i]
-	}
-	// No userinfo stripping here: user@host.com outside a network command is an email address.
-	if i := strings.IndexByte(t, ':'); i >= 0 {
-		// host:port, or the scp/git form host:path.
 		t = t[:i]
 	}
 	t = strings.ToLower(strings.TrimSuffix(t, "."))
@@ -294,34 +396,14 @@ func hostToken(t string) (string, bool) {
 	return t, true
 }
 
-// bareHost accepts dotless names (localhost, internal-svc) in a network-command context.
+// bareHost accepts dotless names (localhost, internal-svc) and user@host in a network command.
 func bareHost(t string) (string, bool) {
 	if i := strings.LastIndexByte(t, '@'); i >= 0 {
 		t = t[i+1:]
 	}
-	if i := strings.LastIndexByte(t, ':'); i >= 0 {
-		t = t[:i]
-	}
 	t = strings.ToLower(t)
-	if t == "" || !validHost(t) || strings.ContainsAny(t, "/") {
+	if t == "" || allDigits(t) || !validHost(t) {
 		return "", false
 	}
 	return t, true
-}
-
-// dedupe removes repeats, keeping first-seen order, and fails when more than max remain.
-func dedupe(in []string, max int) ([]string, error) {
-	seen := make(map[string]bool, len(in))
-	out := in[:0:0]
-	for _, v := range in {
-		if seen[v] {
-			continue
-		}
-		if len(out) >= max {
-			return nil, errors.New("tool input refers to too many distinct hosts or paths")
-		}
-		seen[v] = true
-		out = append(out, v)
-	}
-	return out, nil
 }

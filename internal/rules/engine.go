@@ -173,6 +173,9 @@ func mentionedHosts(ctx context.Context, wanted []string, texts []string) (map[s
 		t = strings.ToLower(t)
 		start := -1
 		for i := 0; i <= len(t); i++ {
+			if i&0xffff == 0 && ctx.Err() != nil { // every 64 KiB
+				return nil, ctx.Err()
+			}
 			if i < len(t) && (isHostChar(t[i]) || t[i] == '.') {
 				if start < 0 {
 					start = i
