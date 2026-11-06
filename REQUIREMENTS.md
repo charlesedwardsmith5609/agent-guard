@@ -1,90 +1,79 @@
-# agent-guard: requirements
+# Requirements and design decisions
 
-Status: Phase 1 decisions accepted by the human ("accept all suggestions"). Items marked
-**[ASSUMED]** were not explicitly answered and should be confirmed.
+Status: **implemented** (all four phases). This file records what was asked for and the decisions
+made along the way. For how the program behaves today, read the [README](README.md) and
+[docs/](docs/); where they differ from this file, they win.
 
-## Purpose
-A local policy proxy between a coding agent (Claude Code, Codex) and its model API. It inspects
-each tool call in the model response before the harness executes it.
+## The brief
 
-## Requirements (from the brief)
-1. YAML config declares allowed tools, allowed hosts, and path scopes.
-2. Block calls to undeclared tools. Block calls to hosts that are neither allowlisted nor
-   mentioned in the user prompt. Flag reads of sensitive paths: `/proc/*/environ`, `~/.ssh`,
-   `.env` files, and the metadata endpoint `169.254.169.254`.
-3. Decisions are ALLOW, BLOCK or ASK. Write a JSONL audit log. Emit OpenTelemetry spans carrying
-   decision, matched rule and latency.
-4. Fail closed: any parse error or timeout blocks the call.
-5. Go standard library `net/http` plus minimal dependencies. Table-driven tests, `go test -race`,
-   govulncheck clean.
-6. README with a threat model that states plainly what it does NOT protect against.
+Build `agent-guard`, a small Go service that acts as a local policy proxy between a coding agent
+(Claude Code, Codex) and its model API, inspecting each tool call in the model response before the
+agent harness executes it.
+
+| # | Requirement | Status | Where |
+|---|-------------|--------|-------|
+| 1 | YAML config declaring allowed tools, allowed hosts and path scopes | Done | `internal/rules`, [docs/policy.md](docs/policy.md) |
+| 2 | Block undeclared tools; block hosts not allowlisted or mentioned in the user prompt; flag reads of `/proc/*/environ`, `~/.ssh`, `.env` files and `169.254.169.254` | Done. Hosts are found heuristically; "flag" means ASK by default and covers any access, not only reads | `internal/rules` |
+| 3 | ALLOW / BLOCK / ASK; JSONL audit log; OpenTelemetry spans with decision, matched rule, latency | Done. ASK is a notice, not an approval flow | `internal/audit`, `internal/telemetry` |
+| 4 | Fail closed: any parse error or timeout blocks the call | Done | `internal/proxy` (`guard.go`, `proxy.go`, `stream.go`) |
+| 5 | Standard library `net/http` plus minimal dependencies; table-driven tests; `go test -race`; govulncheck clean | Done | `go.mod`, `scripts/check.sh` |
+| 6 | README with a threat model that states plainly what it does NOT protect against | Done | [README](README.md#threat-model) |
+| – | Supports Claude Code **and Codex** | **Partly**: only the Anthropic Messages API is implemented, so Codex is not supported | see decision 1 |
 
 ## Phases
-- Phase 1: design and threat model (this document). Approved.
-- Phase 2: proxy skeleton with tests (stdlib only).
-- Phase 3: rules engine (adds `gopkg.in/yaml.v3`).
-- Phase 4: OTel and audit log (adds OpenTelemetry API + SDK, stdout exporter, optional OTLP).
 
-Each phase gets its own `plans/step-N.md` and plan review. No phase starts without approval.
+1. Design and threat model, then stop for approval. Approved.
+2. Proxy skeleton with tests (standard library only).
+3. Rules engine (adds `gopkg.in/yaml.v3`).
+4. Audit log and OpenTelemetry (adds the OpenTelemetry API, SDK and stdout exporter).
+
+Phases 2 to 4, the hardening and the documentation were carried out unattended, on the owner's
+instruction to continue through all phases. Decisions marked **[unattended]** below were made
+during that time without asking, and are the ones most worth reviewing.
 
 ## Decisions
-1. **Protocols:** v1 is Anthropic Messages only. OpenAI Chat Completions and Responses (Codex)
-   are later steps, each needing its own plan.
-2. **Streaming:** pass text through live. Hold each tool-call block until complete and judged.
-3. **ASK:** v1 replaces the call with a "needs approval" notice, behaving like BLOCK for the
-   harness, with the decision recorded as ASK. No approval endpoint in v1.
-4. **Dependencies approved:** `gopkg.in/yaml.v3` (Phase 3); OpenTelemetry API + SDK, stdout
-   exporter, optional OTLP (Phase 4). govulncheck must be clean. Nothing else without approval.
-5. **User prompt:** user-role text from the whole conversation; never tool results.
-   **[ASSUMED]** whole conversation rather than latest turn.
-6. **Extraction:** per-tool argument schemas for known tools (Bash, Read, Write, WebFetch) plus a
-   generic scan of every string argument. Shell parsing is heuristic and documented as such.
-7. **Sensitive paths:** default ASK, configurable per rule.
-8. **Timeouts:** separate configurable values for rule evaluation and the upstream round trip.
-   Both fail closed.
-9. **Audit log:** SHA-256 of the arguments plus a redacted, truncated preview. Never API keys or
-   full bodies.
 
-## Decisions made unattended in Phases 3 and 4 (human to review) [ASSUMED]
-10. **Rule combination:** every rule is evaluated; the strictest verdict wins (BLOCK over ASK over
-    ALLOW). The first rule in evaluation order that produced that verdict is the matched rule.
-11. **Config:** `tools`, `hosts` (exact or `*.suffix`), `paths.workdir`, `paths.allow`
-    (directory prefixes), and `sensitive.<class>` = `ask|block` (default `ask`) for the classes
-    `proc_environ`, `ssh`, `dotenv`, `metadata`. Unknown keys are an error. `-config` is required.
-12. **Path scope** applies to structured path arguments only (`file_path`, `path`, ...). Shell
-    command text gets sensitive-path and host checks but no scope check, because absolute paths
-    like `/usr/bin/git` would make scope checks unusable. Sensitive checks cover any access, not
-    only reads (a shell command cannot be classified reliably).
-13. **Host mention** in the user prompt is a whole-token, case-insensitive match against
-    user-role text. Mention never overrides a sensitive-class rule (metadata endpoint).
-14. **Audit failure fails closed:** if the audit record cannot be queued or the writer has failed,
-    an ALLOW becomes BLOCK (`fail-closed:audit`).
-15. **OpenTelemetry:** API + SDK + stdout trace exporter only. OTLP is not added (optional in
-    decision 4); it can follow later.
-16. **Audit file:** JSONL, mode 0600, append-only, one writer goroutine.
+1. **Protocols.** Anthropic Messages only (streaming and non-streaming). OpenAI chat completions
+   and the Responses API (which Codex uses) are not implemented.
+2. **Streaming.** Text passes through live; each `tool_use` block is held until it is complete and
+   judged.
+3. **ASK.** The call is replaced by a "requires approval" notice, the same as BLOCK from the
+   harness's point of view, and the decision is recorded as ASK. There is no approval endpoint.
+4. **Dependencies.** `gopkg.in/yaml.v3`; OpenTelemetry API, SDK and the stdout trace exporter. No
+   OTLP exporter **[unattended]**. govulncheck must stay clean.
+5. **"Mentioned in the user prompt".** Whole-word, case-insensitive match against user-role text
+   from the whole conversation; tool results are never consulted. A mention never clears a
+   sensitive-location rule. **[unattended: whole conversation, not only the latest turn]**
+6. **Extraction.** There are no per-tool schemas. Every string in a tool's input is scanned for
+   hosts and sensitive path-like text; a fixed list of argument names (`file_path`, `path`, ...)
+   is also checked against the path scope. Shell text is parsed heuristically. *(An earlier draft of
+   this file promised per-tool schemas; they were not built.)*
+7. **Sensitive locations.** Classes `proc_environ`, `ssh`, `dotenv` and `metadata`, each `ask`
+   (default) or `block`.
+8. **Timeouts.** Separate flags for a decision (`-decide-timeout`), the upstream headers
+   (`-upstream-timeout`) and the whole exchange (`-max-response`). All fail closed.
+9. **Audit content.** SHA-256 of the tool input plus a redacted, truncated preview; never headers,
+   API keys or full bodies. `-audit-preview=false` keeps only the hash.
+10. **Rule combination [unattended].** All rules are evaluated and the strictest verdict wins.
+11. **Policy shape [unattended].** `tools`, `hosts`, `paths.workdir`, `paths.allow`,
+    `sensitive.<class>`. Unknown keys and multiple YAML documents are errors.
+12. **Path scope [unattended].** Applied to structured path arguments only; shell text gets the
+    sensitive and host checks but no scope check.
+13. **Required keys and tool patterns [unattended].** `tools`, `hosts` and `paths.allow` are
+    mandatory (an empty list allows nothing). A tool pattern may end in `*` with a prefix of at
+    least 3 characters.
+14. **Audit failure fails closed [unattended].** An ALLOW is released only after its audit record
+    has been written; a failed or late write turns it into BLOCK.
+15. **Audit file [unattended].** JSONL, append-only, mode 0600, created exclusively; symlinks,
+    FIFOs and permissive existing files are refused. Unix only.
+16. **Resource limits [unattended].** In-flight request cap (503), accepted-connection cap,
+    absolute response deadline, size limits on every body and stream, and per-write deadlines.
 
-17. **Required keys and tool patterns:** `tools`, `hosts`, `paths.allow` are mandatory (empty list
-    allows nothing). Tool patterns may end in `*` (prefix of 3+ characters) for MCP names.
-18. **Host detection is heuristic:** URLs, `user@host:`, network-command arguments, and tokens
-    whose last label is in a built-in common-TLD list.
+## Not done
 
-## Deferred (not in scope)
-- Optional judge model for ambiguous calls (outside the four phases).
-- Approval endpoint or CLI for ASK.
-
-## Draft threat model (to be refined in README)
-Defends against (best effort): a model, steered by prompt injection or error, emitting a tool
-call that uses an undeclared tool, reaches an unexpected host, or reads well-known secret
-locations.
-
-Does NOT protect against:
-- A harness or local process that bypasses the proxy (direct API access, different base URL).
-- Obfuscated arguments: base64, shell variable or command substitution, globbing, encoded URLs.
-  Shell command parsing is heuristic.
-- Exfiltration through an allowlisted host, or through DNS.
-- Symlink or TOCTOU tricks: the path is checked at proxy time, not at execution time.
-- Tool results and MCP servers acting on their own, since only model-emitted calls are inspected.
-- Harmful text in model replies (only tool calls are policed).
-- A compromised local machine, the proxy host, or the config/audit files.
-- Anything the user explicitly approves.
-- Upstream API compromise. Request-side injection is only mitigated, not detected.
+- Codex and other OpenAI-style agents.
+- An approval channel for ASK (an endpoint or CLI that waits for a human).
+- An optional judge model for ambiguous calls (this idea came from reading the public
+  `huggingface/safeagents` README for context; none of its code was used).
+- An OTLP exporter, log rotation, hot reload of the policy, Windows support for the audit log.
+- Validation against the live Anthropic API and a real Claude Code session.

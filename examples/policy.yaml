@@ -1,7 +1,11 @@
 # agent-guard example policy. Every key under tools, hosts and paths.allow is required;
 # an empty list ([]) means "allow nothing".
 
-# Tools the agent may call (exact names). A trailing * is a prefix pattern, for MCP servers.
+# Tools the agent may call (exact, case-sensitive names). A trailing * is a prefix pattern
+# (3+ characters), for MCP servers.
+# This list is only a starting point: agents have other tools too, and anything not listed is
+# blocked as tool-not-declared. Run your agent once, then read the tool names it tried from the
+# audit log: jq -r 'select(.rule == "tool-not-declared") | .tool' audit.jsonl | sort | uniq -c
 tools:
   - Read
   - Write
@@ -30,6 +34,8 @@ paths:
     - /tmp
 
 # What to do when a call touches a sensitive location. ask (default) or block.
+# These apply to any access, not only reads. Here: refuse /proc/<pid>/environ and the metadata
+# endpoint outright, and ask about .ssh and .env files.
 sensitive:
   proc_environ: block   # /proc/<pid>/environ
   ssh: ask              # any .ssh path
