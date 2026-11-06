@@ -23,6 +23,12 @@ func (p *Proxy) rewriteMessage(ctx context.Context, pc policy.Context, raw []byt
 	if err := json.Unmarshal(contentRaw, &blocks); err != nil {
 		return nil, err
 	}
+	var stop string
+	if sr, ok := top["stop_reason"]; ok {
+		if err := json.Unmarshal(sr, &stop); err != nil {
+			return nil, errors.New("invalid stop_reason")
+		}
+	}
 
 	calls, survived, replaced := 0, 0, 0
 	for i, b := range blocks {
@@ -68,8 +74,6 @@ func (p *Proxy) rewriteMessage(ctx context.Context, pc policy.Context, raw []byt
 		return nil, err
 	}
 	top["content"] = newContent
-	var stop string
-	_ = json.Unmarshal(top["stop_reason"], &stop)
 	if survived == 0 && stop == "tool_use" {
 		top["stop_reason"] = json.RawMessage(`"end_turn"`)
 	}

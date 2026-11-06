@@ -55,6 +55,9 @@ func (g *guard) decide(ctx context.Context, pc policy.Context, tc policy.ToolCal
 
 	select {
 	case r := <-res:
+		if dctx.Err() != nil { // a result that raced the deadline or a cancellation does not count
+			return failClosed("fail-closed:timeout", "decision timed out")
+		}
 		if r.err != nil {
 			return failClosed("fail-closed:error", "decider error")
 		}

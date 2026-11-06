@@ -23,6 +23,7 @@ var errEventTooLarge = errors.New("SSE event too large")
 
 type sseEvent struct {
 	raw  []byte // the event exactly as it should be re-emitted, including the blank line
+	name string
 	data []byte
 }
 
@@ -37,6 +38,7 @@ func newSSEReader(r io.Reader) *sseReader {
 // next returns io.EOF only between events. An event cut off mid-way is io.ErrUnexpectedEOF.
 func (s *sseReader) next() (*sseEvent, error) {
 	var raw, data bytes.Buffer
+	var name string
 	started := false
 	for s.sc.Scan() {
 		line := s.sc.Bytes()
@@ -45,7 +47,7 @@ func (s *sseReader) next() (*sseEvent, error) {
 				continue
 			}
 			raw.WriteByte('\n')
-			return &sseEvent{raw: raw.Bytes(), data: data.Bytes()}, nil
+			return &sseEvent{raw: raw.Bytes(), name: name, data: data.Bytes()}, nil
 		}
 		if raw.Len()+len(line)+1 > maxSSEEvent {
 			return nil, errEventTooLarge
@@ -53,6 +55,9 @@ func (s *sseReader) next() (*sseEvent, error) {
 		started = true
 		raw.Write(line)
 		raw.WriteByte('\n')
+		if rest, ok := bytes.CutPrefix(line, []byte("event:")); ok {
+			name = string(bytes.TrimSpace(rest))
+		}
 		if rest, ok := bytes.CutPrefix(line, []byte("data:")); ok {
 			rest = bytes.TrimPrefix(rest, []byte(" "))
 			if data.Len() > 0 {
@@ -115,6 +120,7 @@ type streamer struct {
 	input     bytes.Buffer
 
 	calls, survived, replaced int
+	total                     int64 // bytes of every raw upstream event read, before filtering
 	done                      bool
 }
 
@@ -158,6 +164,10 @@ func (s *streamer) run(rd *sseReader) error {
 			}
 			return violation("reading upstream stream: %v", err)
 		}
+		s.total += int64(len(ev.raw))
+		if s.total > s.p.cfg.MaxBody {
+			return violation("stream exceeds size limit")
+		}
 		if err := s.handle(ev); err != nil {
 			return err
 		}
@@ -172,6 +182,9 @@ func (s *streamer) handle(ev *sseEvent) error {
 	var d evData
 	if err := json.Unmarshal(ev.data, &d); err != nil {
 		return violation("invalid event JSON")
+	}
+	if ev.name != d.Type { // clients may dispatch on either; they must agree
+		return violation("event name does not match payload type")
 	}
 	switch d.Type {
 	case "content_block_start":

@@ -94,6 +94,11 @@ data: {"type":"message_start","message":{"id":"m","content":[{"type":"tool_use",
 		{"event of many sub-limit lines", msgStart + strings.Repeat(": "+strings.Repeat("x", 100000)+"\n", 12) + "\n" + textBlock(0, "x") + msgDelta("end_turn") + msgStop, nil},
 		{"message_stop while holding", msgStart + toolStart(0, "ok_tool") + toolDelta(0, `{"a":"SECRET"}`) + msgStop, nil},
 		{"message_delta while holding", msgStart + toolStart(0, "ok_tool") + toolDelta(0, `{"a":"SECRET"}`) + msgDelta("tool_use") + msgStop, nil},
+		{"event name hides a tool block under ping", msgStart + "event: ping\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"bad_tool\",\"input\":{}}}\n\n" + toolDelta(0, `{"a":"SECRET"}`) + blockStop(0) + msgDelta("tool_use") + msgStop, nil},
+		{"event name mismatch on a delta", msgStart + toolStart(0, "ok_tool") + "event: ping\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n" + blockStop(0) + msgDelta("tool_use") + msgStop, nil},
+		{"missing event name", msgStart + "data: {\"type\":\"ping\"}\n\n" + textBlock(0, "x") + msgDelta("end_turn") + msgStop, nil},
+		{"total stream size over limit (text)", msgStart + repeatBlocks(60, func(i int) string { return textBlock(i, strings.Repeat("t", 200)) }) + msgDelta("end_turn") + msgStop, func(c *Config) { c.MaxBody = 8000 }},
+		{"total stream size over limit (blocked calls shrink to notices)", msgStart + repeatBlocks(60, func(i int) string { return toolBlock(i, "bad_tool", `{"a":"x"}`) }) + msgDelta("tool_use") + msgStop, func(c *Config) { c.MaxBody = 8000; c.MaxToolCalls = 1000 }},
 		{"line too long", msgStart + "data: " + strings.Repeat("x", maxSSELine+10) + "\n\n", nil},
 	}
 	for _, tc := range cases {
@@ -183,4 +188,12 @@ func TestStreamIdleTimeout(t *testing.T) {
 	if !strings.Contains(r.body, "event: error") || strings.Contains(r.body, "message_stop") {
 		t.Errorf("expected error event, got:\n%s", r.body)
 	}
+}
+
+func repeatBlocks(n int, f func(i int) string) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		sb.WriteString(f(i))
+	}
+	return sb.String()
 }

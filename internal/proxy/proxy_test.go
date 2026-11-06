@@ -43,6 +43,8 @@ func TestNonStream(t *testing.T) {
 		{name: "decider error", upstream: msgJSON("tool_use", tu("err_tool", `{"a":"SECRET"}`)), wantStatus: 200, wantTypes: []string{"text"}, wantStop: "end_turn", wantText: "blocked by policy", notText: "SECRET"},
 		{name: "too many calls", upstream: msgJSON("tool_use", tu("ok_tool", `{}`), tu("ok_tool", `{"a":"SECRET"}`)), mod: func(c *Config) { c.MaxToolCalls = 1 }, wantStatus: 200, wantTypes: []string{"tool_use", "text"}, wantStop: "tool_use", wantText: "fail-closed:too-many-calls", notText: "SECRET"},
 		{name: "malformed JSON", upstream: `{"content":[`, wantStatus: 502},
+		{name: "non-string stop_reason", upstream: `{"stop_reason":5,"content":[` + tu("bad_tool", `{"a":"SECRET"}`) + `]}`, wantStatus: 502},
+		{name: "null stop_reason ok", upstream: `{"stop_reason":null,"content":[` + txt + `]}`, wantStatus: 200, wantTypes: []string{"text"}},
 		{name: "missing content", upstream: `{"type":"message"}`, wantStatus: 502},
 		{name: "bad block", upstream: `{"content":["x"]}`, wantStatus: 502},
 		{name: "oversized", upstream: msgJSON("end_turn", txt, txt, txt, txt, txt, txt, txt, txt, txt, txt), mod: func(c *Config) { c.MaxBody = 300 }, wantStatus: 502},
@@ -100,7 +102,10 @@ func TestRequestHandling(t *testing.T) {
 	ch := make(chan seen, 4)
 	up := startUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		ch <- seen{r.Header.Get("X-Api-Key"), r.Header.Get("Accept-Encoding"), r.URL.Path, r.URL.RawQuery, string(b)}
+		select { // never block the handler: a routing regression must fail the test, not hang it
+		case ch <- seen{r.Header.Get("X-Api-Key"), r.Header.Get("Accept-Encoding"), r.URL.Path, r.URL.RawQuery, string(b)}:
+		default:
+		}
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, msgJSON("end_turn", txt))
 	})

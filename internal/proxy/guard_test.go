@@ -48,6 +48,30 @@ func TestGuardFailClosed(t *testing.T) {
 	}
 }
 
+// decideAsync runs g.decide off the test goroutine so a regression fails by timeout, not a hang.
+func decideAsync(t *testing.T, g *guard) policy.Decision {
+	t.Helper()
+	ch := make(chan policy.Decision, 1)
+	go func() { ch <- g.decide(context.Background(), policy.Context{}, policy.ToolCall{}) }()
+	return recv(t, ch)
+}
+
+// A result that is ready at the same time as a cancelled context must not be honoured.
+func TestGuardIgnoresResultAfterCancellation(t *testing.T) {
+	g := newGuard(decFunc(func(context.Context, policy.Context, policy.ToolCall) (policy.Decision, error) {
+		return policy.Decision{Verdict: policy.Allow, Rule: "x"}, nil
+	}), time.Second, 1024) // slots free asynchronously; leave room for every iteration
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 200; i++ { // both select cases can be ready; every outcome must be BLOCK
+		ch := make(chan policy.Decision, 1)
+		go func() { ch <- g.decide(ctx, policy.Context{}, policy.ToolCall{}) }()
+		if d := recv(t, ch); d.Verdict != policy.Block || d.Rule != "fail-closed:timeout" {
+			t.Fatalf("iteration %d: got %+v", i, d)
+		}
+	}
+}
+
 func TestGuardDeciderGoroutineExitsAfterTimeout(t *testing.T) {
 	exited := make(chan struct{})
 	g := newGuard(decFunc(func(ctx context.Context, _ policy.Context, _ policy.ToolCall) (policy.Decision, error) {
@@ -55,7 +79,7 @@ func TestGuardDeciderGoroutineExitsAfterTimeout(t *testing.T) {
 		<-ctx.Done()
 		return policy.Decision{}, ctx.Err()
 	}), 20*time.Millisecond, 1)
-	if d := g.decide(context.Background(), policy.Context{}, policy.ToolCall{}); d.Verdict != policy.Block {
+	if d := decideAsync(t, g); d.Verdict != policy.Block {
 		t.Fatalf("got %+v", d)
 	}
 	recv(t, exited)
@@ -72,11 +96,11 @@ func TestGuardOverload(t *testing.T) {
 	}), 20*time.Millisecond, 1)
 	t.Cleanup(func() { close(release) })
 
-	if d := g.decide(context.Background(), policy.Context{}, policy.ToolCall{}); d.Rule != "fail-closed:timeout" {
+	if d := decideAsync(t, g); d.Rule != "fail-closed:timeout" {
 		t.Fatalf("first call: %+v", d)
 	}
 	recv(t, started)
-	if d := g.decide(context.Background(), policy.Context{}, policy.ToolCall{}); d.Rule != "fail-closed:overloaded" || d.Verdict != policy.Block {
+	if d := decideAsync(t, g); d.Rule != "fail-closed:overloaded" || d.Verdict != policy.Block {
 		t.Fatalf("second call: %+v", d)
 	}
 }
