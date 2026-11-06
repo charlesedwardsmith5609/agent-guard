@@ -46,7 +46,8 @@ var netCommands = map[string]bool{
 }
 
 // For these, a bare dotted operand is a local file; only host:path and user@host forms count.
-var localFileCommands = map[string]bool{"scp": true, "rsync": true, "sftp": true}
+// (sftp is not listed: its operand is the destination.)
+var localFileCommands = map[string]bool{"scp": true, "rsync": true}
 
 // Options whose next token is a value (a file, header, method...) and never a destination.
 var valueOptions = map[string]map[string]bool{
@@ -247,6 +248,12 @@ func (w *walker) scan(key, s string) {
 			continue
 		}
 
+		if netCmd != "" {
+			if a, err := netip.ParseAddr(tok); err == nil && a.Is6() {
+				w.addHost(a.Unmap().String())
+				continue
+			}
+		}
 		hasColon := strings.Contains(tok, ":")
 		parts := strings.Split(tok, ":")
 		for pi, part := range parts {
@@ -274,7 +281,7 @@ func (w *walker) scan(key, s string) {
 			}
 			// Dotless names: localhost, internal-svc, user@host.
 			if netCmd != "" && !strings.HasPrefix(part, "-") {
-				if h, ok := bareHost(part); ok && (h == "localhost" || !operandSeen || strings.Contains(part, "@")) {
+				if h, ok := bareHost(part); ok && (h == "localhost" || !operandSeen || strings.Contains(part, "@") || (hasColon && pi == 0)) {
 					w.addHost(h)
 					operandSeen = true
 				}

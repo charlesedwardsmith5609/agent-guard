@@ -91,3 +91,13 @@ concurrent `Decide` calls. Nothing is shared.
   endings (`out.txt`, `file.zip`) are not hosts.
 - `looseIPv4` implements all `inet_aton` forms (1 to 4 parts).
 - Exactly one YAML document is accepted; `Load` reads at most 1 MiB.
+
+## Known heuristic limits (not fixed; to be stated in the README)
+Reported by the final reviews and accepted as limits of shell-text parsing, not bugs to chase:
+tokenization is not quote-aware (a `;` inside quotes ends the network-command context); option
+arity is only known for curl and wget (`ssh -l user host` may read `user` as the operand); URLs
+inside request data (`curl --data https://x`) are still counted as hosts (extra blocks, fails
+safe); remote file names after `ssh host cmd` can be read as hosts (fails safe); cancellation is
+checked between phases and every 256 tokens or 64 KiB, not inside a single regex pass (inputs
+are capped at 1 MiB). Shell obfuscation (variables, base64, command substitution) is not
+detected at all.
