@@ -16,11 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"agent-guard/internal/policy"
 	"agent-guard/internal/proxy"
+	"agent-guard/internal/rules"
 )
 
 type options struct {
+	config          string
 	listen          string
 	upstream        string
 	decideTimeout   time.Duration
@@ -34,6 +35,7 @@ func parseOptions(args []string, out io.Writer) (options, error) {
 	var o options
 	fs := flag.NewFlagSet("agent-guard", flag.ContinueOnError)
 	fs.SetOutput(out)
+	fs.StringVar(&o.config, "config", "", "path to the YAML policy file (required)")
 	fs.StringVar(&o.listen, "listen", "127.0.0.1:8787", "address to listen on")
 	fs.StringVar(&o.upstream, "upstream", "https://api.anthropic.com", "upstream API base URL")
 	fs.DurationVar(&o.decideTimeout, "decide-timeout", 5*time.Second, "per-decision timeout")
@@ -43,6 +45,9 @@ func parseOptions(args []string, out io.Writer) (options, error) {
 	fs.IntVar(&o.maxConns, "max-conns", 256, "concurrent accepted connections")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
+	}
+	if o.config == "" {
+		return options{}, errors.New("-config is required")
 	}
 	if o.maxInflight <= 0 || o.maxConns <= 0 || o.maxResponse <= 0 {
 		return options{}, errors.New("-max-inflight, -max-conns and -max-response must be positive")
@@ -56,10 +61,13 @@ func newServer(o options, log *slog.Logger) (*http.Server, net.Listener, error) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("bad -upstream: %w", err)
 	}
-	// Phase 2: no rules engine yet, so every tool call is denied (fail closed).
+	engine, err := rules.Load(o.config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading %s: %w", o.config, err)
+	}
 	p, err := proxy.New(proxy.Config{
 		Upstream:            u,
-		Decider:             policy.DenyAll{},
+		Decider:             engine,
 		Logger:              log,
 		DecideTimeout:       o.decideTimeout,
 		UpstreamTimeout:     o.upstreamTimeout,
