@@ -1,0 +1,8 @@
+.reviews/
+.pairing-setup.log
+*.local.md
+.claude/settings.local.json
+bin/
+*.exe
+*.test
+*.out

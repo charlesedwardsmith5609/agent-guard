@@ -1,0 +1,8 @@
+---
+description: Pairing-mode working agreements
+alwaysApply: true
+---
+Follow the working agreements in `AGENTS.md` at the repository root for every request: plan
+before code, stay inside the approved step, no new dependencies without approval, run
+`bash scripts/check.sh` after every change, and name the owner of any shared state. Read the
+skill files listed for each language in `AGENTS.md` before writing code in that area.
