@@ -1,0 +1,37 @@
+# agent-guard example policy. Every key under tools, hosts and paths.allow is required;
+# an empty list ([]) means "allow nothing".
+
+# Tools the agent may call (exact names). A trailing * is a prefix pattern, for MCP servers.
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - WebFetch
+  - "mcp__github__*"
+
+# Hosts tool calls may contact. "*.example.com" matches subdomains but not example.com itself.
+# A host that is not listed is still allowed if the user's own messages mention it.
+hosts:
+  - github.com
+  - "*.githubusercontent.com"
+  - pypi.org
+  - "*.pythonhosted.org"
+  - registry.npmjs.org
+
+paths:
+  # Relative paths in tool arguments resolve against workdir (must be absolute or start with ~).
+  workdir: ~/code/myproject
+  # Structured path arguments (file_path, path, ...) must lie under one of these directories.
+  allow:
+    - ~/code/myproject
+    - /tmp
+
+# What to do when a call touches a sensitive location. ask (default) or block.
+sensitive:
+  proc_environ: block   # /proc/<pid>/environ
+  ssh: ask              # any .ssh path
+  dotenv: ask           # .env and .env.*
+  metadata: block       # cloud metadata endpoint (169.254.169.254 and spellings)
