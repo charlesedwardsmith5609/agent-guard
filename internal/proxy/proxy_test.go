@@ -280,7 +280,7 @@ func TestUpstreamURLIsCopied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := New(Config{Upstream: u, Decider: policy.DenyAll{}})
+	p, err := New(Config{Upstream: u, Decider: policy.DenyAll{}, Audit: &recObs{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestJSONWriteDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := New(Config{Upstream: u, Decider: policy.DenyAll{}, MaxBody: 64 << 20, WriteTimeout: 200 * time.Millisecond})
+	p, err := New(Config{Upstream: u, Decider: policy.DenyAll{}, Audit: &recObs{}, MaxBody: 64 << 20, WriteTimeout: 200 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,11 @@ func TestNewValidation(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Error("expected error for empty config")
 	}
-	if _, err := New(Config{Decider: policy.DenyAll{}}); err == nil {
+	if _, err := New(Config{Decider: policy.DenyAll{}, Audit: &recObs{}}); err == nil {
 		t.Error("expected error for missing upstream")
+	}
+	u, _ := url.Parse("http://127.0.0.1:1")
+	if _, err := New(Config{Upstream: u, Decider: policy.DenyAll{}}); err == nil {
+		t.Error("expected error for a missing audit observer")
 	}
 }

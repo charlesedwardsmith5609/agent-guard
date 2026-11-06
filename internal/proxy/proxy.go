@@ -23,6 +23,12 @@ type Config struct {
 	Decider  policy.Decider // required; must be safe for concurrent use
 	Logger   *slog.Logger   // optional; nil discards
 
+	// Audit records every decision before the proxy acts on it. It is required: a proxy that
+	// cannot be audited does not start, and a failing Audit turns ALLOW into BLOCK.
+	Audit policy.Observer
+	// Telemetry receives each final decision (optional). Its errors are logged, never fatal.
+	Telemetry policy.Observer
+
 	MaxBody              int64         // 32 MiB: request and response body cap
 	MaxToolCalls         int           // 64: tool calls inspected per response
 	MaxHeldBytes         int64         // 1 MiB: bytes held for one streamed tool call
@@ -88,6 +94,9 @@ func New(cfg Config) (*Proxy, error) {
 	}
 	if cfg.Decider == nil {
 		return nil, errors.New("proxy: decider is required")
+	}
+	if cfg.Audit == nil {
+		return nil, errors.New("proxy: an audit observer is required")
 	}
 	cfg.applyDefaults()
 	u := *cfg.Upstream // private copy: later changes by the caller must not reroute traffic
@@ -372,4 +381,35 @@ func (b *idleBody) Read(p []byte) (int, error) {
 func (b *idleBody) Close() error {
 	b.timer.Stop()
 	return b.rc.Close()
+}
+
+// decide runs the guard (or applies the call-count limit), records the decision with the audit
+// observer, and reports it to telemetry. If the audit cannot record an ALLOW, the call is
+// blocked: nothing runs unrecorded. Telemetry sees the final decision.
+func (p *Proxy) decide(ctx context.Context, pc policy.Context, tc policy.ToolCall, stream, overLimit bool) policy.Decision {
+	start := time.Now()
+	var d policy.Decision
+	if overLimit {
+		d = failClosed("fail-closed:too-many-calls", "tool call limit exceeded")
+	} else {
+		d = p.guard.decide(ctx, pc, tc)
+	}
+	ev := policy.Event{Call: tc, Decision: d, Start: start, End: time.Now(), Stream: stream}
+
+	// Record even if the client has gone: detach from request cancellation, but stay bounded.
+	octx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.cfg.DecideTimeout)
+	defer cancel()
+	if err := p.cfg.Audit.Observe(octx, ev); err != nil {
+		p.log.Error("audit record failed", "err", err)
+		if d.Verdict == policy.Allow {
+			d = failClosed("fail-closed:audit", "audit unavailable")
+			ev.Decision = d
+		}
+	}
+	if p.cfg.Telemetry != nil {
+		if err := p.cfg.Telemetry.Observe(octx, ev); err != nil {
+			p.log.Warn("telemetry failed", "err", err)
+		}
+	}
+	return d
 }

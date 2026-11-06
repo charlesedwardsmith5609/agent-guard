@@ -299,12 +299,7 @@ func (s *streamer) finishTool(stop *sseEvent) error {
 	held := s.held
 	s.open, s.holding, s.held, s.heldBytes = -1, false, nil, 0
 
-	var dec policy.Decision
-	if s.calls > s.p.cfg.MaxToolCalls {
-		dec = failClosed("fail-closed:too-many-calls", "tool call limit exceeded")
-	} else {
-		dec = s.p.guard.decide(s.ctx, s.pc, tc)
-	}
+	dec := s.p.decide(s.ctx, s.pc, tc, true, s.calls > s.p.cfg.MaxToolCalls)
 	if dec.Verdict == policy.Allow {
 		s.survived++
 		for _, h := range held {

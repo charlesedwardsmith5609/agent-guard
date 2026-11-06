@@ -39,14 +39,55 @@ func byName(_ context.Context, _ policy.Context, t policy.ToolCall) (policy.Deci
 	return policy.Decision{Verdict: policy.Block, Rule: "r-bad"}, nil
 }
 
+// recObs is a concurrency-safe Observer that records events and can be told to fail.
+type recObs struct {
+	mu     sync.Mutex
+	events []policy.Event
+	err    error
+	ctxErr []error
+	got    chan struct{} // one token per observed event (non-blocking send)
+}
+
+func (r *recObs) Observe(ctx context.Context, e policy.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e)
+	r.ctxErr = append(r.ctxErr, ctx.Err())
+	select {
+	case r.got <- struct{}{}:
+	default:
+	}
+	return r.err
+}
+
+func (r *recObs) snapshot() []policy.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]policy.Event(nil), r.events...)
+}
+
+func (r *recObs) setErr(err error) {
+	r.mu.Lock()
+	r.err = err
+	r.mu.Unlock()
+}
+
 // startProxy starts a Proxy on a loopback listener (port 0) and returns its address.
 func startProxy(t *testing.T, upstream string, d policy.Decider, mod func(*Config)) string {
+	t.Helper()
+	addr, _ := startProxyObs(t, upstream, d, mod)
+	return addr
+}
+
+// startProxyObs is startProxy that also returns the audit observer it installed.
+func startProxyObs(t *testing.T, upstream string, d policy.Decider, mod func(*Config)) (string, *recObs) {
 	t.Helper()
 	u, err := url.Parse(upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Upstream: u, Decider: d}
+	obs := &recObs{got: make(chan struct{}, 256)}
+	cfg := Config{Upstream: u, Decider: d, Audit: obs}
 	if mod != nil {
 		mod(&cfg)
 	}
@@ -56,7 +97,7 @@ func startProxy(t *testing.T, upstream string, d policy.Decider, mod func(*Confi
 	}
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
-	return srv.Listener.Addr().String()
+	return srv.Listener.Addr().String(), obs
 }
 
 func startUpstream(t *testing.T, h http.HandlerFunc) string {

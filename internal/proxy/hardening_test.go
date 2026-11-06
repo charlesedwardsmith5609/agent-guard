@@ -289,7 +289,7 @@ func TestStreamWriteDeadline(t *testing.T) {
 	})
 	u, _ := url.Parse(up)
 	logs := &lockedBuf{}
-	p, err := New(Config{Upstream: u, Decider: decFunc(byName), Logger: newLogger(logs),
+	p, err := New(Config{Upstream: u, Decider: decFunc(byName), Audit: &recObs{}, Logger: newLogger(logs),
 		WriteTimeout: 200 * time.Millisecond, MaxBody: 1 << 40, MaxResponseDuration: time.Hour})
 	if err != nil {
 		t.Fatal(err)

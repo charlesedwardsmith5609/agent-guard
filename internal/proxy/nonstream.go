@@ -45,16 +45,11 @@ func (p *Proxy) rewriteMessage(ctx context.Context, pc policy.Context, raw []byt
 			continue
 		}
 		calls++
-		var dec policy.Decision
-		if calls > p.cfg.MaxToolCalls {
-			dec = failClosed("fail-closed:too-many-calls", "tool call limit exceeded")
-		} else {
-			input := head.Input
-			if len(input) == 0 {
-				input = json.RawMessage("{}")
-			}
-			dec = p.guard.decide(ctx, pc, policy.ToolCall{ID: head.ID, Name: head.Name, Input: input})
+		input := head.Input
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
 		}
+		dec := p.decide(ctx, pc, policy.ToolCall{ID: head.ID, Name: head.Name, Input: input}, false, calls > p.cfg.MaxToolCalls)
 		if dec.Verdict == policy.Allow {
 			survived++
 			continue
