@@ -54,17 +54,22 @@ func parseOptions(args []string, out io.Writer) (options, error) {
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
+	// Flag-parse errors are printed by the flag package; these validation errors are ours to print.
+	invalid := func(msg string) (options, error) {
+		fmt.Fprintf(out, "agent-guard: %s\n", msg)
+		return options{}, errors.New(msg)
+	}
 	if o.config == "" {
-		return options{}, errors.New("-config is required")
+		return invalid("-config is required")
 	}
 	if o.auditLog == "" {
-		return options{}, errors.New("-audit-log is required")
+		return invalid("-audit-log is required")
 	}
 	if o.otel != "none" && o.otel != "stdout" {
-		return options{}, errors.New("-otel must be none or stdout")
+		return invalid("-otel must be none or stdout")
 	}
-	if o.maxInflight <= 0 || o.maxConns <= 0 || o.maxResponse <= 0 {
-		return options{}, errors.New("-max-inflight, -max-conns and -max-response must be positive")
+	if o.maxInflight <= 0 || o.maxConns <= 0 || o.maxResponse <= 0 || o.decideTimeout <= 0 || o.upstreamTimeout <= 0 {
+		return invalid("-max-inflight, -max-conns, -max-response, -decide-timeout and -upstream-timeout must be positive")
 	}
 	return o, nil
 }

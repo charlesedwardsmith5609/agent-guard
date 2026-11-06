@@ -42,6 +42,8 @@ func TestParseOptions(t *testing.T) {
 		{"zero conns", with("-max-conns", "0"), false},
 		{"negative inflight", with("-max-inflight", "-1"), false},
 		{"zero response", with("-max-response", "0s"), false},
+		{"zero decide timeout", with("-decide-timeout", "0s"), false},
+		{"negative upstream timeout", with("-upstream-timeout", "-5s"), false},
 		{"unknown flag", with("-nope"), false},
 	}
 	for _, tc := range cases {
@@ -51,6 +53,29 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("err = %v, want ok=%v", err, tc.ok)
 			}
 		})
+	}
+}
+
+// A rejected command line must say why (the flag package reports its own parse errors).
+func TestParseOptionsExplainsRejections(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"-audit-log required", []string{"-config", "c.yaml"}, "-audit-log is required"},
+		{"-config required", []string{"-audit-log", "a"}, "-config is required"},
+		{"bad otel", []string{"-config", "c.yaml", "-audit-log", "a", "-otel", "otlp"}, "-otel must be none or stdout"},
+		{"zero limit", []string{"-config", "c.yaml", "-audit-log", "a", "-max-conns", "0"}, "must be positive"},
+	}
+	for _, tc := range cases {
+		var out bytes.Buffer
+		if _, err := parseOptions(tc.args, &out); err == nil {
+			t.Errorf("%s: expected an error", tc.name)
+		}
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("%s: output %q does not say %q", tc.name, out.String(), tc.want)
+		}
 	}
 }
 

@@ -3,6 +3,8 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"agent-guard/internal/policy"
@@ -17,6 +19,7 @@ type guard struct {
 	d       policy.Decider
 	timeout time.Duration
 	sem     chan struct{}
+	log     *slog.Logger // optional; set once before use
 }
 
 func newGuard(d policy.Decider, timeout time.Duration, maxInflight int) *guard {
@@ -59,7 +62,11 @@ func (g *guard) decide(ctx context.Context, pc policy.Context, tc policy.ToolCal
 			return failClosed("fail-closed:timeout", "decision timed out")
 		}
 		if r.err != nil {
-			return failClosed("fail-closed:error", "decider error")
+			msg := shortError(r.err)
+			if g.log != nil {
+				g.log.Warn("decision failed; blocking the call", "tool", policy.SafeID(tc.Name), "err", msg)
+			}
+			return failClosed("fail-closed:error", "decider error: "+msg)
 		}
 		if !r.dec.Verdict.Valid() {
 			return failClosed("fail-closed:verdict", "unknown verdict")
@@ -68,4 +75,19 @@ func (g *guard) decide(ctx context.Context, pc policy.Context, tc policy.ToolCal
 	case <-dctx.Done():
 		return failClosed("fail-closed:timeout", "decision timed out")
 	}
+}
+
+// shortError renders an error for logs and audit reasons: one line, control characters removed,
+// at most 120 bytes.
+func shortError(err error) string {
+	s := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, err.Error())
+	if len(s) > 120 {
+		s = s[:120] + "..."
+	}
+	return s
 }

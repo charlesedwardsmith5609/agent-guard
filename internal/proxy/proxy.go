@@ -108,9 +108,11 @@ func New(cfg Config) (*Proxy, error) {
 	if lg == nil {
 		lg = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	g := newGuard(cfg.Decider, cfg.DecideTimeout, cfg.MaxInflightDecisions)
+	g.log = lg
 	return &Proxy{
 		cfg:    cfg,
-		guard:  newGuard(cfg.Decider, cfg.DecideTimeout, cfg.MaxInflightDecisions),
+		guard:  g,
 		client: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		log:    lg,
 		sem:    make(chan struct{}, cfg.MaxInflightRequests),

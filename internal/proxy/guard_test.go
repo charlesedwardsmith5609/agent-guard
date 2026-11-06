@@ -3,6 +3,8 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -69,6 +71,23 @@ func TestGuardIgnoresResultAfterCancellation(t *testing.T) {
 		if d := recv(t, ch); d.Verdict != policy.Block || d.Rule != "fail-closed:timeout" {
 			t.Fatalf("iteration %d: got %+v", i, d)
 		}
+	}
+}
+
+// A failing decision is explained in the decision reason and in the log, so an operator can see
+// why the call was blocked.
+func TestGuardExplainsDeciderErrors(t *testing.T) {
+	var logs lockedBuf
+	g := newGuard(decFunc(func(context.Context, policy.Context, policy.ToolCall) (policy.Decision, error) {
+		return policy.Decision{}, fmt.Errorf("tool input is not a JSON object\nsecond line")
+	}), time.Second, 4)
+	g.log = slog.New(slog.NewTextHandler(&logs, nil))
+	d := decideAsync(t, g)
+	if d.Rule != "fail-closed:error" || !strings.Contains(d.Reason, "tool input is not a JSON object") || strings.Contains(d.Reason, "\n") {
+		t.Errorf("reason = %q", d.Reason)
+	}
+	if out := logs.String(); !strings.Contains(out, "decision failed") || !strings.Contains(out, "tool input is not a JSON object") {
+		t.Errorf("failure not logged: %s", out)
 	}
 }
 
