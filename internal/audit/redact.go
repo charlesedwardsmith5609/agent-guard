@@ -33,7 +33,7 @@ var (
 	curlUser   = regexp.MustCompile(`(\s-u\s*)\S+`)
 	userinfo   = regexp.MustCompile(`(://)[^\s/@:]+(:[^\s/@]*)?@`)
 	envAssign  = regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)=\S+`)
-	wordSplit  = regexp.MustCompile(`[\s"'=:,;()<>\[\]{}]+`)
+	wordSplit  = regexp.MustCompile(`[\s"'=:,;()<>\[\]{}/\\]+`)
 )
 
 // redactString removes credentials from free text: known token shapes, URL userinfo, secret-looking
