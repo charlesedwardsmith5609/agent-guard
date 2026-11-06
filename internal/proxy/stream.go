@@ -56,7 +56,8 @@ func (s *sseReader) next() (*sseEvent, error) {
 		raw.Write(line)
 		raw.WriteByte('\n')
 		if rest, ok := bytes.CutPrefix(line, []byte("event:")); ok {
-			name = string(bytes.TrimSpace(rest))
+			// SSE: remove at most one leading space; the rest of the value is significant.
+			name = string(bytes.TrimPrefix(rest, []byte(" ")))
 		}
 		if rest, ok := bytes.CutPrefix(line, []byte("data:")); ok {
 			rest = bytes.TrimPrefix(rest, []byte(" "))
@@ -73,6 +74,27 @@ func (s *sseReader) next() (*sseEvent, error) {
 		return nil, io.ErrUnexpectedEOF
 	}
 	return nil, io.EOF
+}
+
+var errStreamTooLarge = errors.New("stream exceeds size limit")
+
+// capReader counts every byte read from the upstream (blank lines, comments, events alike)
+// and fails once more than left bytes have been read.
+type capReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		return 0, errStreamTooLarge
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
 }
 
 type violationError struct{ msg string }
@@ -120,7 +142,6 @@ type streamer struct {
 	input     bytes.Buffer
 
 	calls, survived, replaced int
-	total                     int64 // bytes of every raw upstream event read, before filtering
 	done                      bool
 }
 
@@ -141,7 +162,7 @@ func (p *Proxy) serveStream(ctx context.Context, cancel context.CancelFunc, w ht
 		return nil
 	}
 	s := &streamer{p: p, ctx: ctx, pc: pc, out: out, open: -1}
-	err := s.run(newSSEReader(resp.Body))
+	err := s.run(newSSEReader(&capReader{r: resp.Body, left: p.cfg.MaxBody}))
 	if err == nil {
 		return
 	}
@@ -163,10 +184,6 @@ func (s *streamer) run(rd *sseReader) error {
 				return violation("stream ended before message_stop")
 			}
 			return violation("reading upstream stream: %v", err)
-		}
-		s.total += int64(len(ev.raw))
-		if s.total > s.p.cfg.MaxBody {
-			return violation("stream exceeds size limit")
 		}
 		if err := s.handle(ev); err != nil {
 			return err

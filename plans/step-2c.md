@@ -102,5 +102,13 @@ and tests in `guard_test.go`, `stream_test.go`, `proxy_test.go`, `helpers_test.g
 - Not changed (disagreed): validation inside `newGuard` (the exported `New` already defaults
   non-positive values).
 
+## Addendum 2: fixes from the cross-review of the fix and hardening commits
+- **B1** `capReader` under the SSE scanner counts every upstream byte (blank lines and comments
+  included) against `MaxBody`; it replaces the per-event total from A3. Test: blank-line flood.
+- **B2** The SSE `event:` value is parsed per spec (at most one leading space removed, nothing
+  else trimmed). Tests: trailing tab, two leading spaces.
+- **B3** `main` logs the upstream scheme and host only. **B4** `newServer` closes the listener if
+  `LimitListener` fails.
+
 ## Check
 `bash scripts/check.sh`, per stage.

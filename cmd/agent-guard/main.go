@@ -73,10 +73,12 @@ func newServer(o options, log *slog.Logger) (*http.Server, net.Listener, error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	ln, err = proxy.LimitListener(ln, o.maxConns)
+	limited, err := proxy.LimitListener(ln, o.maxConns)
 	if err != nil {
+		ln.Close()
 		return nil, nil, err
 	}
+	ln = limited
 	srv := &http.Server{
 		Handler:           p,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -105,7 +107,12 @@ func main() {
 	defer stop()
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
-	log.Info("listening", "addr", ln.Addr().String(), "upstream", o.upstream)
+	// Log scheme and host only: the URL could carry credentials in its userinfo or query.
+	upstreamHost := "(unparsed)"
+	if u, err := url.Parse(o.upstream); err == nil {
+		upstreamHost = u.Scheme + "://" + u.Host
+	}
+	log.Info("listening", "addr", ln.Addr().String(), "upstream", upstreamHost)
 
 	select {
 	case err := <-errc:
