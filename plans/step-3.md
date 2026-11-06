@@ -81,3 +81,13 @@ concurrent `Decide` calls. Nothing is shared.
 - Strictest wins; error inputs (non-object, invalid JSON, depth bomb) return an error.
 - End to end through a real proxy listener: a blocked tool call is replaced; an allowed one
   passes (`cmd/agent-guard` test with a config file).
+
+## Addendum: fixes from the cross-review of the rules commits
+- URL authority ends at `/`, `?` or `#` (`http://evil.com?@github.com` is evil.com).
+- Hosts and candidate paths are deduplicated and capped; user text is scanned once for all
+  wanted hosts; `ctx` is checked in every loop.
+- Relative paths are checked for sensitivity both as written and resolved against `workdir`.
+- `git host:path` remotes are recognised; inside network commands, dotted tokens with file-like
+  endings (`out.txt`, `file.zip`) are not hosts.
+- `looseIPv4` implements all `inet_aton` forms (1 to 4 parts).
+- Exactly one YAML document is accepted; `Load` reads at most 1 MiB.

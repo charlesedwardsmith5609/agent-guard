@@ -56,13 +56,23 @@ type Engine struct {
 	sensitive   map[string]policy.Verdict
 }
 
+const maxConfigBytes = 1 << 20
+
 var hostLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // Load reads and parses a config file.
 func Load(file string) (*Engine, error) {
-	b, err := os.ReadFile(file)
+	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxConfigBytes {
+		return nil, fmt.Errorf("config is larger than %d bytes", maxConfigBytes)
 	}
 	return Parse(b, Options{})
 }
@@ -77,6 +87,10 @@ func Parse(data []byte, opt Options) (*Engine, error) {
 			return nil, errors.New("config is empty")
 		}
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("config: exactly one YAML document is allowed")
 	}
 	if fc.Tools == nil || fc.Hosts == nil || fc.Paths == nil || fc.Paths.Allow == nil {
 		return nil, errors.New("config: tools, hosts and paths.allow are required (use [] to allow nothing)")

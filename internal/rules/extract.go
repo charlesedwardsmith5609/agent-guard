@@ -7,13 +7,14 @@ import (
 	"net/netip"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
 const (
 	maxInputBytes = 1 << 20
 	maxDepth      = 16
+	maxHosts      = 256  // distinct hosts per call; more is an error (fail closed)
+	maxCandidates = 1024 // distinct path-like tokens per call
 )
 
 // extracted is what a tool call's input refers to.
@@ -29,7 +30,7 @@ var pathKeys = map[string]bool{
 }
 
 var (
-	urlRe  = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://([^\s/'"<>)\]\\]+|\[[0-9A-Fa-f:.]+\])`)
+	urlRe  = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://([^\s/?#'"<>)\]\\]+|\[[0-9A-Fa-f:.]+\])`)
 	scpRe  = regexp.MustCompile(`[\w.\-]+@([A-Za-z0-9][A-Za-z0-9.\-]*[A-Za-z0-9]):`)
 	ipv4Re = regexp.MustCompile(`(?:^|[^0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:$|[^0-9.])`)
 )
@@ -52,6 +53,18 @@ func init() {
 	}
 }
 
+// Endings that mark a dotted token as a file name, not a host, inside a network command
+// (curl -o out.txt, wget file.zip).
+var fileExts = map[string]bool{}
+
+func init() {
+	for _, t := range strings.Fields(`txt json zip tar gz tgz bz2 xz md log yaml yml toml html htm csv png jpg
+		jpeg gif svg pdf py go js ts rs c h cpp hpp sh rb out bin so conf cfg ini xml sql lock sum mod
+		java kt swift php pl lua exe dll dmg deb rpm whl jar war`) {
+		fileExts[t] = true
+	}
+}
+
 type walker struct {
 	ctx   context.Context
 	out   extracted
@@ -71,6 +84,16 @@ func extract(ctx context.Context, input []byte) (extracted, error) {
 	}
 	w := &walker{ctx: ctx}
 	if err := w.walk(v, "", 0); err != nil {
+		return extracted{}, err
+	}
+	var err error
+	if w.out.hosts, err = dedupe(w.out.hosts, maxHosts); err != nil {
+		return extracted{}, err
+	}
+	if w.out.candidates, err = dedupe(w.out.candidates, maxCandidates); err != nil {
+		return extracted{}, err
+	}
+	if w.out.structured, err = dedupe(w.out.structured, maxCandidates); err != nil {
 		return extracted{}, err
 	}
 	return w.out, nil
@@ -137,10 +160,10 @@ func (w *walker) scan(key, s string) {
 		w.addHost(m[1])
 	}
 
-	netCtx := false
+	netCtx, gitCtx := false, false
 	for _, tok := range tokenize(s) {
 		if tok == "" { // separator: a new command begins
-			netCtx = false
+			netCtx, gitCtx = false, false
 			continue
 		}
 		base := tok
@@ -149,6 +172,10 @@ func (w *walker) scan(key, s string) {
 		}
 		if netCommands[base] {
 			netCtx = true
+			continue
+		}
+		if base == "git" {
+			gitCtx = true
 			continue
 		}
 		if looksLikePath(tok) {
@@ -162,8 +189,14 @@ func (w *walker) scan(key, s string) {
 			continue
 		}
 		if h, ok := hostToken(tok); ok {
-			if netCtx || tlds[h[strings.LastIndexByte(h, '.')+1:]] {
+			last := h[strings.LastIndexByte(h, '.')+1:]
+			switch {
+			case tlds[last]:
 				w.addHost(h)
+			case netCtx && !fileExts[last] && !allDigits(last):
+				w.addHost(h)
+			case gitCtx && strings.Contains(tok, ":") && !fileExts[last] && !allDigits(last):
+				w.addHost(h) // git clone evil.example:org/repo.git
 			}
 		} else if netCtx && !strings.HasPrefix(tok, "-") {
 			if h, ok := bareHost(tok); ok {
@@ -171,6 +204,15 @@ func (w *walker) scan(key, s string) {
 			}
 		}
 	}
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // authorityHost extracts the host from a URL authority (userinfo, port and brackets removed).
@@ -238,10 +280,9 @@ func hostToken(t string) (string, bool) {
 		t = t[:i]
 	}
 	// No userinfo stripping here: user@host.com outside a network command is an email address.
-	if i := strings.LastIndexByte(t, ':'); i >= 0 {
-		if _, err := strconv.Atoi(t[i+1:]); err == nil {
-			t = t[:i]
-		}
+	if i := strings.IndexByte(t, ':'); i >= 0 {
+		// host:port, or the scp/git form host:path.
+		t = t[:i]
 	}
 	t = strings.ToLower(strings.TrimSuffix(t, "."))
 	if !strings.Contains(t, ".") || !validHost(t) {
@@ -266,4 +307,21 @@ func bareHost(t string) (string, bool) {
 		return "", false
 	}
 	return t, true
+}
+
+// dedupe removes repeats, keeping first-seen order, and fails when more than max remain.
+func dedupe(in []string, max int) ([]string, error) {
+	seen := make(map[string]bool, len(in))
+	out := in[:0:0]
+	for _, v := range in {
+		if seen[v] {
+			continue
+		}
+		if len(out) >= max {
+			return nil, errors.New("tool input refers to too many distinct hosts or paths")
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out, nil
 }

@@ -13,13 +13,23 @@ var procEnviron = regexp.MustCompile(`^/proc/[^/]+(/task/[^/]+)?/environ$`)
 
 // pathClass returns the sensitive class of a path-like token, or "" if it is not sensitive.
 // The path is cleaned lexically (so /ok/../home/x/.ssh/id is caught); symlinks are not followed.
+// A relative path is checked both as written and resolved against workdir, because the shell's
+// real working directory is unknown.
 func (e *Engine) pathClass(p string) string {
 	p = e.expandHome(p)
-	if strings.HasPrefix(p, "/") {
-		p = path.Clean(p)
-	} else {
-		p = path.Clean(strings.TrimPrefix(p, "./"))
+	forms := []string{path.Clean(p)}
+	if !strings.HasPrefix(p, "/") {
+		forms = []string{path.Clean(strings.TrimPrefix(p, "./")), path.Clean(e.workdir + "/" + p)}
 	}
+	for _, f := range forms {
+		if c := classifyClean(f); c != "" {
+			return c
+		}
+	}
+	return ""
+}
+
+func classifyClean(p string) string {
 	if procEnviron.MatchString(p) {
 		return ClassProcEnviron
 	}
@@ -45,15 +55,16 @@ func hostClass(h string) string {
 	return ""
 }
 
-// looseIPv4 parses the spellings that C resolvers accept for an IPv4 address: a single 32-bit
-// integer, or four parts each decimal, 0x-hex or 0-octal. It returns the canonical dotted form.
+// looseIPv4 parses every spelling that inet_aton accepts: one to four parts, each decimal,
+// 0x-hex or 0-octal, where the last part fills all remaining bytes (so 169.254.43518 and
+// 2852039166 both mean 169.254.169.254). It returns the canonical dotted form.
 func looseIPv4(s string) (string, bool) {
 	parts := strings.Split(s, ".")
-	if len(parts) != 1 && len(parts) != 4 {
+	if len(parts) > 4 {
 		return "", false
 	}
-	var vals []uint64
-	for _, p := range parts {
+	var n uint64
+	for i, p := range parts {
 		if p == "" {
 			return "", false
 		}
@@ -61,21 +72,17 @@ func looseIPv4(s string) (string, bool) {
 		if err != nil {
 			return "", false
 		}
-		vals = append(vals, v)
-	}
-	var n uint64
-	if len(vals) == 1 {
-		n = vals[0]
-		if n > 0xffffffff {
-			return "", false
-		}
-	} else {
-		for _, v := range vals {
+		if i < len(parts)-1 {
 			if v > 255 {
 				return "", false
 			}
-			n = n<<8 | v
+			n |= v << (8 * uint(3-i))
+			continue
 		}
+		if v >= 1<<(8*uint(4-i)) { // the last part must fit in the bytes that remain
+			return "", false
+		}
+		n |= v
 	}
 	return strconv.Itoa(int(n>>24&255)) + "." + strconv.Itoa(int(n>>16&255)) + "." +
 		strconv.Itoa(int(n>>8&255)) + "." + strconv.Itoa(int(n&255)), true

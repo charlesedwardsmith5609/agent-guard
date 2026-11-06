@@ -64,9 +64,21 @@ func (e *Engine) Decide(ctx context.Context, pc policy.Context, tc policy.ToolCa
 	if err := ctx.Err(); err != nil {
 		return policy.Decision{}, err
 	}
+	var unlisted []string
 	for _, h := range ex.hosts {
-		if !e.hostAllowed(h) && !mentioned(h, pc.UserText) {
-			fs = append(fs, finding{policy.Block, RuleHostNotAllowed, "host " + quote(h) + " is not allowlisted or mentioned by the user"})
+		if !e.hostAllowed(h) {
+			unlisted = append(unlisted, h)
+		}
+	}
+	if len(unlisted) > 0 {
+		said, err := mentionedHosts(ctx, unlisted, pc.UserText)
+		if err != nil {
+			return policy.Decision{}, err
+		}
+		for _, h := range unlisted {
+			if !said[h] {
+				fs = append(fs, finding{policy.Block, RuleHostNotAllowed, "host " + quote(h) + " is not allowlisted or mentioned by the user"})
+			}
 		}
 	}
 	for _, p := range ex.structured {
@@ -141,42 +153,43 @@ func (e *Engine) inScope(p string) bool {
 
 // mentioned reports whether host appears as a whole token (case-insensitive) in the user text.
 func mentioned(host string, texts []string) bool {
-	host = strings.ToLower(host)
+	m, _ := mentionedHosts(context.Background(), []string{host}, texts)
+	return m[strings.ToLower(host)]
+}
+
+// mentionedHosts scans the user text once and reports which of the wanted hosts appear as whole
+// tokens. A token is a maximal run of [a-z0-9._-]; surrounding dots (a sentence's full stop) are
+// trimmed, so "evil.com." matches evil.com but "evil.com.attacker.net" does not.
+func mentionedHosts(ctx context.Context, wanted []string, texts []string) (map[string]bool, error) {
+	want := make(map[string]bool, len(wanted))
+	for _, h := range wanted {
+		want[strings.ToLower(h)] = true
+	}
+	found := map[string]bool{}
 	for _, t := range texts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		t = strings.ToLower(t)
-		for from := 0; ; {
-			i := strings.Index(t[from:], host)
-			if i < 0 {
-				break
+		start := -1
+		for i := 0; i <= len(t); i++ {
+			if i < len(t) && (isHostChar(t[i]) || t[i] == '.') {
+				if start < 0 {
+					start = i
+				}
+				continue
 			}
-			start, end := from+i, from+i+len(host)
-			if boundaryBefore(t, start) && boundaryAfter(t, end) {
-				return true
+			if start >= 0 {
+				if w := strings.Trim(t[start:i], "."); want[w] {
+					found[w] = true
+				}
+				start = -1
 			}
-			from = start + 1
 		}
 	}
-	return false
+	return found, nil
 }
 
 func isHostChar(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '-' || b == '_'
-}
-
-func boundaryBefore(t string, i int) bool {
-	if i == 0 {
-		return true
-	}
-	return !isHostChar(t[i-1]) && t[i-1] != '.'
-}
-
-func boundaryAfter(t string, i int) bool {
-	if i >= len(t) {
-		return true
-	}
-	if isHostChar(t[i]) {
-		return false
-	}
-	// A dot continues the name unless it ends a sentence.
-	return !(t[i] == '.' && i+1 < len(t) && isHostChar(t[i+1]))
 }

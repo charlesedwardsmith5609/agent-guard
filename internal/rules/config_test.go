@@ -31,6 +31,8 @@ func TestParseConfig(t *testing.T) {
 		{"missing hosts", "tools: []\npaths:\n  allow: []\n", "required"},
 		{"missing paths", "tools: []\nhosts: []\n", "required"},
 		{"missing paths.allow", "tools: []\nhosts: []\npaths:\n  workdir: /w\n", "required"},
+		{"second document", ok("---\ntools: []\nhosts: []\npaths:\n  allow: []\n"), "exactly one"},
+		{"malformed second document", ok("---\n: : :\n"), "exactly one"},
 		{"invalid yaml", "tools: [", "config"},
 		{"host with path", "tools: []\nhosts: [evil.com/x]\npaths:\n  allow: []\n", "invalid host"},
 		{"host with port", "tools: []\nhosts: ['a.com:80']\npaths:\n  allow: []\n", "invalid host"},
@@ -79,6 +81,17 @@ func TestWorkdirDefaultsAndTildeEntries(t *testing.T) {
 		if got := decide(t, e, "Read", `{"file_path":"`+path+`"}`); got.Verdict != want {
 			t.Errorf("%s: got %+v want %s", path, got, want)
 		}
+	}
+}
+
+func TestLoadRejectsHugeFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "big.yaml")
+	body := "tools: []\nhosts: []\npaths:\n  allow: []\n# " + strings.Repeat("x", maxConfigBytes) + "\n"
+	if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(f); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("got %v", err)
 	}
 }
 
