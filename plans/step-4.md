@@ -103,3 +103,14 @@ tracer provider's `Shutdown(ctx)` (flushes spans), all under one shared deadline
   makes the batch exporter drop spans once its bounded queue fills; shutdown honours its context.
 - Test fixtures that look like credentials are assembled at run time, so no secret-shaped literal
   exists in the repository (a secret scan is part of publishing).
+- **Acknowledged writes.** `Observe` waits (bounded by its context, i.e. the decision timeout)
+  for the writer's answer, so an ALLOW is only released after its record was written; a write
+  error or timeout turns it into BLOCK `fail-closed:audit`. This replaces the "return once
+  queued" design in the first draft of this plan.
+- `Open` creates new files with `O_EXCL`, opens existing ones with `O_NOFOLLOW|O_NONBLOCK` and
+  checks the opened file (regular, no group/other access). `Close` closes the destination once
+  and closes it early if the writer is stuck past the deadline.
+- Preview is skipped (placeholder) for inputs over 64 KiB; more patterns (Basic, `--password x`,
+  `curl -u`).
+- `main` stops the server (force-closing after 10 s), then drains sinks under a fresh 10 s
+  deadline, including after an unexpected `Serve` failure.

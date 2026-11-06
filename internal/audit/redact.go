@@ -9,7 +9,10 @@ import (
 	"unicode/utf8"
 )
 
-const redacted = "[REDACTED]"
+const (
+	redacted        = "[REDACTED]"
+	previewInputMax = 64 << 10 // larger inputs get a placeholder; the hash is still recorded
+)
 
 var (
 	secretKey = regexp.MustCompile(`(?i)(key|token|secret|passw|authorization|credential|cookie|bearer|auth)`)
@@ -24,9 +27,13 @@ var (
 		regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._\-~+/]{8,}=*`),
 		regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 	}
-	userinfo  = regexp.MustCompile(`(://)[^\s/@:]+(:[^\s/@]*)?@`)
-	envAssign = regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)=\S+`)
-	wordSplit = regexp.MustCompile(`[\s"'=:,;()<>\[\]{}]+`)
+	basicAuth = regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/]{8,}=*`)
+	// --password x, --token=x, curl -u user:pass: common credential-bearing options.
+	credOption = regexp.MustCompile(`(?i)(--?(?:password|passwd|pass|token|secret|api-?key|auth)(?:=|\s+))\S+`)
+	curlUser   = regexp.MustCompile(`(\s-u\s*)\S+`)
+	userinfo   = regexp.MustCompile(`(://)[^\s/@:]+(:[^\s/@]*)?@`)
+	envAssign  = regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)=\S+`)
+	wordSplit  = regexp.MustCompile(`[\s"'=:,;()<>\[\]{}]+`)
 )
 
 // redactString removes credentials from free text: known token shapes, URL userinfo, secret-looking
@@ -35,6 +42,9 @@ func redactString(s string) string {
 	for _, re := range tokenPatterns {
 		s = re.ReplaceAllString(s, redacted)
 	}
+	s = basicAuth.ReplaceAllString(s, redacted)
+	s = credOption.ReplaceAllString(s, "${1}"+redacted)
+	s = curlUser.ReplaceAllString(s, "${1}"+redacted)
 	s = userinfo.ReplaceAllString(s, "${1}"+redacted+"@")
 	s = envAssign.ReplaceAllString(s, "${1}="+redacted)
 	var out strings.Builder
@@ -124,6 +134,9 @@ func redactValue(v any) any {
 
 // preview renders the tool input as compact, redacted JSON of at most max bytes.
 func preview(input json.RawMessage, max int) string {
+	if len(input) > previewInputMax {
+		return "[too large to preview]" // bound CPU and memory on the request path
+	}
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	var v any

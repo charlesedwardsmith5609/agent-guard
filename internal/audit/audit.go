@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -53,12 +54,19 @@ var (
 	errFull   = errors.New("audit: queue is full")
 )
 
+// item is one queued record with the channel the writer answers on.
+type item struct {
+	rec Record
+	ack chan error // capacity 1: the writer never blocks on it
+}
+
 // Logger implements policy.Observer.
 //
-// Ownership: one writer goroutine owns the destination and the encoder. Other goroutines only
-// send Record values on queue with a non-blocking send. The RWMutex guards just the closed flag
-// and the close of queue: Observe holds the read lock across its send and Close takes the write
-// lock before closing the channel, so no send can race the close.
+// Ownership: one writer goroutine owns the destination and the encoder. Other goroutines send
+// items on queue with a non-blocking send and then wait, bounded by their context, for the
+// writer's answer, so Observe returns nil only after the record was written. The RWMutex guards
+// just the closed flag and the close of queue: Observe holds the read lock across its send and
+// Close takes the write lock before closing the channel, so no send can race the close.
 type Logger struct {
 	opt    Options
 	out    io.Writer
@@ -66,33 +74,38 @@ type Logger struct {
 
 	mu     sync.RWMutex
 	closed bool
-	queue  chan Record
+	queue  chan item
 
-	failed atomic.Bool
-	done   chan struct{}
+	failed    atomic.Bool
+	done      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// Open appends to path. It rejects symlinks, non-regular files and files readable or writable by
-// group or others (it does not silently change permissions on a file it did not create).
+// Open appends to path. New files are created exclusively with mode 0600; existing files are
+// opened without following symlinks or blocking on FIFOs. Either way the opened file must be a
+// regular file that is not accessible to group or others (permissions on a file the logger did
+// not create are never changed).
 func Open(path string, opt Options) (*Logger, error) {
-	if fi, err := os.Lstat(path); err == nil {
-		if !fi.Mode().IsRegular() {
-			return nil, fmt.Errorf("audit: %s is not a regular file", path)
-		}
-		if fi.Mode().Perm()&0o077 != 0 {
-			return nil, fmt.Errorf("audit: %s has mode %o; want 0600", path, fi.Mode().Perm())
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_EXCL|noFollow, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND|noFollow|nonBlock, 0)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	fi, err := f.Stat()
-	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 {
+	if err != nil {
 		f.Close()
-		return nil, fmt.Errorf("audit: %s is not a private regular file", path)
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("audit: %s is not a regular file", path)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		f.Close()
+		return nil, fmt.Errorf("audit: %s has mode %o; want 0600", path, fi.Mode().Perm())
 	}
 	l := newLogger(f, opt)
 	l.closer = f
@@ -112,27 +125,37 @@ func newLogger(w io.Writer, opt Options) *Logger {
 	if opt.QueueSize <= 0 {
 		opt.QueueSize = defaultQueue
 	}
-	l := &Logger{opt: opt, out: w, queue: make(chan Record, opt.QueueSize), done: make(chan struct{})}
+	l := &Logger{opt: opt, out: w, queue: make(chan item, opt.QueueSize), done: make(chan struct{})}
 	go l.run()
 	return l
 }
 
-// Observe queues a record without blocking. An error means the event was not recorded.
-func (l *Logger) Observe(_ context.Context, e policy.Event) error {
+// Observe queues the record and waits for the writer to report the result. It returns nil only
+// after the record was written. A full queue, a closed logger, a failed writer or an expired
+// context is an error. The wait is bounded by ctx, so a stuck disk delays a decision by at most
+// the caller's timeout and then fails closed.
+func (l *Logger) Observe(ctx context.Context, e policy.Event) error {
 	if l.failed.Load() {
 		return errFailed
 	}
-	rec := l.record(e)
+	it := item{rec: l.record(e), ack: make(chan error, 1)}
 	l.mu.RLock()
-	defer l.mu.RUnlock()
 	if l.closed {
+		l.mu.RUnlock()
 		return errClosed
 	}
 	select {
-	case l.queue <- rec:
-		return nil
+	case l.queue <- it:
+		l.mu.RUnlock()
 	default:
+		l.mu.RUnlock()
 		return errFull
+	}
+	select {
+	case err := <-it.ack:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -158,18 +181,23 @@ func (l *Logger) record(e policy.Event) Record {
 func (l *Logger) run() {
 	defer close(l.done)
 	enc := json.NewEncoder(l.out)
-	for rec := range l.queue {
+	for it := range l.queue {
 		if l.failed.Load() {
-			continue // keep draining so the queue cannot fill behind a broken sink
+			it.ack <- errFailed // keep draining so the queue cannot fill behind a broken sink
+			continue
 		}
-		if err := enc.Encode(rec); err != nil {
+		if err := enc.Encode(it.rec); err != nil {
 			l.failed.Store(true)
+			it.ack <- fmt.Errorf("audit: write failed: %w", err)
+			continue
 		}
+		it.ack <- nil
 	}
 }
 
-// Close stops accepting records, writes what is queued, and closes the destination. If the
-// writer is blocked past ctx it returns ctx.Err() and abandons the writer goroutine.
+// Close stops accepting records, writes what is queued, and closes the destination (once). If the
+// writer is still blocked when ctx expires, the destination is closed to interrupt it, the
+// context error is returned, and the writer goroutine ends when its write returns.
 func (l *Logger) Close(ctx context.Context) error {
 	l.mu.Lock()
 	if !l.closed {
@@ -180,14 +208,21 @@ func (l *Logger) Close(ctx context.Context) error {
 	select {
 	case <-l.done:
 	case <-ctx.Done():
+		l.closeDestination()
 		return ctx.Err()
 	}
-	var err error
-	if l.closer != nil {
-		err = l.closer.Close()
-	}
+	err := l.closeDestination()
 	if err == nil && l.failed.Load() {
 		err = errFailed
 	}
 	return err
+}
+
+func (l *Logger) closeDestination() error {
+	l.closeOnce.Do(func() {
+		if l.closer != nil {
+			l.closeErr = l.closer.Close()
+		}
+	})
+	return l.closeErr
 }

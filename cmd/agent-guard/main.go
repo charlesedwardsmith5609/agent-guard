@@ -157,23 +157,27 @@ func main() {
 	}
 	log.Info("listening", "addr", ln.Addr().String(), "upstream", upstreamHost)
 
+	exit := 0
 	select {
 	case err := <-errc:
 		log.Error("serve", "err", err)
-		os.Exit(1)
+		exit = 1
 	case <-ctx.Done():
 	}
+	// Stop the server first, force-closing stragglers after the deadline, then drain the audit
+	// log and flush spans under a fresh deadline so a slow shutdown cannot starve the drain.
 	sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	exit := 0
 	if err := srv.Shutdown(sctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("shutdown", "err", err)
+		srv.Close()
 		exit = 1
 	}
-	// After the server stops no decision is in flight: drain the audit log, then flush spans.
-	if err := closeSinks(sctx); err != nil {
+	cancel()
+	dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := closeSinks(dctx); err != nil {
 		log.Error("closing audit log or telemetry", "err", err)
 		exit = 1
 	}
+	dcancel()
 	os.Exit(exit)
 }

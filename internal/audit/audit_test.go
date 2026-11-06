@@ -11,9 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -31,6 +31,8 @@ var fixtures = map[string]string{
 	"JWT":    "eyJhbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0" + "." + "dBjftJeZ4CVPmB92K27uhbUJU1p1r",
 	"BEARER": "abcdefghijkl" + "12345",
 	"PEM":    "-----BEGIN RSA PRIVATE" + " KEY-----",
+	"BASICH": "Ba" + "sic dXNlcjpwYXNzd29yZA==",
+	"CREDS":  "ali" + "ce:hun" + "ter2",
 }
 
 // fx replaces @NAME@ placeholders with the fixtures above.
@@ -141,6 +143,10 @@ func TestRedaction(t *testing.T) {
 		{"env assignment", `{"command":"export AWS_SECRET_ACCESS_KEY=abc123xyz && ls"}`, []string{"abc123xyz"}, []string{"AWS_SECRET_ACCESS_KEY", "ls"}},
 		{"bearer", `{"command":"curl -H 'Authorization: Bearer @BEARER@' x"}`, []string{"@BEARER@"}, nil},
 		{"url userinfo", `{"command":"git clone https://user:hunter2@github.com/x/y"}`, []string{"hunter2"}, []string{"github.com"}},
+		{"basic auth", `{"command":"curl -H 'Authorization: @BASICH@' x"}`, []string{"dXNlcjpwYXNzd29yZA"}, nil},
+		{"password option", `{"command":"mysql --password hunter2 -h db"}`, []string{"hunter2"}, []string{"mysql", "db"}},
+		{"password option equals", `{"command":"tool --token=abcd1234"}`, []string{"abcd1234"}, nil},
+		{"curl -u", `{"command":"curl -u @CREDS@ https://github.com/x"}`, []string{"hunter2", "alice"}, []string{"github.com"}},
 		{"openai style", `{"command":"echo @SK@"}`, []string{"@SK@"}, nil},
 		{"github token", `{"command":"echo @GHP@"}`, []string{"@GHP@"}, nil},
 		{"aws key id", `{"command":"echo @AWSID@"}`, []string{"@AWSID@"}, nil},
@@ -186,6 +192,21 @@ func TestRedactionAlsoCoversReasonAndIDs(t *testing.T) {
 	r := lines(t, out)[0]
 	if r["tool"] != "Bad_Tool_[31m" && !strings.HasPrefix(r["tool"].(string), "Bad_Tool_") {
 		t.Errorf("tool = %v", r["tool"])
+	}
+}
+
+func TestHugeInputsGetNoPreview(t *testing.T) {
+	huge := json.RawMessage(`{"command":"` + strings.Repeat("a b ", previewInputMax/4+10) + `"}`)
+	if got := preview(huge, previewMax); got != "[too large to preview]" {
+		t.Errorf("got %q", got[:min(len(got), 40)])
+	}
+	buf := &lockedBuf{}
+	l := NewWriter(buf, Options{})
+	l.Observe(context.Background(), policy.Event{Call: policy.ToolCall{Name: "T", ID: "1", Input: huge}, Decision: policy.Decision{Verdict: policy.Allow, Rule: "allow"}})
+	closeOK(t, l)
+	r := lines(t, buf.String())[0]
+	if r["args_sha256"] == "" || r["args_preview"] != "[too large to preview]" {
+		t.Errorf("record = %v", r)
 	}
 }
 
@@ -256,6 +277,17 @@ func TestOpenFilePermissions(t *testing.T) {
 			t.Fatal("expected an error")
 		}
 	})
+	t.Run("fifo is rejected without blocking", func(t *testing.T) {
+		p := filepath.Join(dir, "fifo")
+		if err := syscall.Mkfifo(p, 0o600); err != nil {
+			t.Skip("mkfifo unavailable")
+		}
+		res := make(chan error, 1)
+		go func() { _, err := Open(p, Options{}); res <- err }()
+		if err := recv(t, res); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
 	t.Run("directory is rejected", func(t *testing.T) {
 		if _, err := Open(dir, Options{}); err == nil {
 			t.Fatal("expected an error")
@@ -298,100 +330,152 @@ type gatedWriter struct {
 	once    sync.Once
 }
 
+func newGated() *gatedWriter {
+	return &gatedWriter{gate: make(chan struct{}), entered: make(chan struct{})}
+}
+
 func (g *gatedWriter) Write(p []byte) (int, error) {
 	g.once.Do(func() { close(g.entered) })
 	<-g.gate
 	return len(p), nil
 }
 
-func TestFullQueueFailsWithoutBlocking(t *testing.T) {
-	g := &gatedWriter{gate: make(chan struct{}), entered: make(chan struct{})}
-	l := NewWriter(g, Options{QueueSize: 2})
-	t.Cleanup(func() {
-		select {
-		case <-g.gate:
-		default:
-			close(g.gate)
-		}
-	})
-	e := ev("T", "1", `{}`, policy.Allow, "allow", "")
-	l.Observe(context.Background(), e)
-	select { // the writer now holds one record, blocked in Write
+func (g *gatedWriter) release() {
+	select {
+	case <-g.gate:
+	default:
+		close(g.gate)
+	}
+}
+
+func awaitEntered(t *testing.T, g *gatedWriter) {
+	t.Helper()
+	select {
 	case <-g.entered:
 	case <-time.After(testTimeout):
-		t.Fatal("writer never started")
+		t.Fatal("the writer never started writing")
 	}
-	result := make(chan error, 1)
-	go func() {
-		var err error
-		for i := 0; i < 10 && err == nil; i++ {
-			err = l.Observe(context.Background(), e)
-		}
-		result <- err
-	}()
-	select {
-	case err := <-result:
-		if !errors.Is(err, errFull) {
-			t.Fatalf("got %v, want queue-full error", err)
-		}
-	case <-time.After(testTimeout):
-		t.Fatal("Observe blocked on a full queue")
+}
+
+// Observe returns nil only after the record was written: while the write is stuck it waits, and
+// when its context ends it reports failure instead of pretending success.
+func TestObserveWaitsForTheWrite(t *testing.T) {
+	g := newGated()
+	l := NewWriter(g, Options{})
+	t.Cleanup(g.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := l.Observe(ctx, ev("T", "1", `{}`, policy.Allow, "allow", ""))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Observe returned %v while the write was still blocked; want the context error", err)
 	}
-	close(g.gate)
+	g.release()
+	if err := l.Observe(context.Background(), ev("T", "2", `{}`, policy.Allow, "allow", "")); err != nil {
+		t.Fatalf("Observe after the writer recovered: %v", err)
+	}
 	closeOK(t, l)
 }
 
+func TestFullQueueFailsWithoutBlocking(t *testing.T) {
+	g := newGated()
+	l := NewWriter(g, Options{QueueSize: 2})
+	t.Cleanup(g.release)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e := ev("T", "1", `{}`, policy.Allow, "allow", "")
+	results := make(chan error, 8)
+	observe := func() { results <- l.Observe(ctx, e) }
+	go observe()
+	awaitEntered(t, g) // the writer holds one record, blocked in Write
+	for i := 0; i < 5; i++ {
+		go observe() // two fit in the queue and wait; the rest must fail at once
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case err := <-results:
+			if !errors.Is(err, errFull) {
+				t.Fatalf("got %v, want the queue-full error", err)
+			}
+		case <-time.After(testTimeout):
+			t.Fatal("Observe blocked on a full queue")
+		}
+	}
+	cancel() // the three waiting callers give up
+	for i := 0; i < 3; i++ {
+		if err := recv(t, results); !errors.Is(err, context.Canceled) {
+			t.Errorf("waiting caller got %v", err)
+		}
+	}
+	g.release()
+	closeOK(t, l)
+}
+
+func recv[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting")
+		panic("unreachable")
+	}
+}
+
 func TestCloseWithBlockedWriterHonoursContext(t *testing.T) {
-	g := &gatedWriter{gate: make(chan struct{}), entered: make(chan struct{})}
+	g := newGated()
 	l := NewWriter(g, Options{})
-	t.Cleanup(func() { close(g.gate) })
-	l.Observe(context.Background(), ev("T", "1", `{}`, policy.Allow, "allow", ""))
-	<-g.entered
+	t.Cleanup(g.release)
+	obsCtx, stopObs := context.WithCancel(context.Background())
+	defer stopObs()
+	go l.Observe(obsCtx, ev("T", "1", `{}`, policy.Allow, "allow", ""))
+	awaitEntered(t, g)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- l.Close(ctx) }()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("got %v", err)
-		}
-	case <-time.After(testTimeout):
-		t.Fatal("Close hung on a blocked writer")
+	if err := recv(t, done); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v", err)
 	}
 }
 
-type failWriter struct{ called chan struct{} }
-
-func (f failWriter) Write([]byte) (int, error) {
-	select {
-	case f.called <- struct{}{}:
-	default:
-	}
-	return 0, io.ErrClosedPipe
+type countingCloser struct {
+	lockedBuf
+	mu     sync.Mutex
+	closed int
 }
 
-func TestWriteFailureFailsLaterObserves(t *testing.T) {
-	fw := failWriter{called: make(chan struct{}, 1)}
-	l := NewWriter(fw, Options{})
+func (c *countingCloser) Close() error { c.mu.Lock(); c.closed++; c.mu.Unlock(); return nil }
+func (c *countingCloser) count() int   { c.mu.Lock(); defer c.mu.Unlock(); return c.closed }
+
+func TestDestinationClosedExactlyOnce(t *testing.T) {
+	c := &countingCloser{}
+	l := NewWriter(c, Options{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); closeOK(t, l) }()
+	}
+	wg.Wait()
+	if c.count() != 1 {
+		t.Errorf("destination closed %d times", c.count())
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// A write failure must reach the Observe call that queued the record, so the proxy can refuse
+// the ALLOW; later calls fail fast.
+func TestWriteFailureReachesTheCaller(t *testing.T) {
+	l := NewWriter(failWriter{}, Options{})
 	e := ev("T", "1", `{}`, policy.Allow, "allow", "")
-	if err := l.Observe(context.Background(), e); err != nil {
-		t.Fatal(err)
+	err := l.Observe(context.Background(), e)
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("first Observe = %v, want the write error", err)
 	}
-	select {
-	case <-fw.called:
-	case <-time.After(testTimeout):
-		t.Fatal("writer never ran")
-	}
-	deadline := time.Now().Add(testTimeout)
-	for {
-		if err := l.Observe(context.Background(), e); errors.Is(err, errFailed) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("Observe never reported the failed writer")
-		}
-		runtime.Gosched()
+	if err := l.Observe(context.Background(), e); !errors.Is(err, errFailed) {
+		t.Fatalf("later Observe = %v, want errFailed", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()

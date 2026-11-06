@@ -3,10 +3,12 @@ package proxy
 import (
 	"context"
 	"errors"
+	"io"
 	"net/url"
 	"strings"
 	"testing"
 
+	"agent-guard/internal/audit"
 	"agent-guard/internal/policy"
 )
 
@@ -151,5 +153,22 @@ func TestNewRequiresAudit(t *testing.T) {
 	u, _ := url.Parse("http://127.0.0.1:1")
 	if _, err := New(Config{Upstream: u, Decider: policy.DenyAll{}}); err == nil {
 		t.Fatal("expected an error without an audit observer")
+	}
+}
+
+type brokenDisk struct{}
+
+func (brokenDisk) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// With the real audit logger on a failing disk, an ALLOW must not reach the harness: the write
+// error has to come back to the decision before the call is released.
+func TestRealAuditLoggerOnBrokenDiskBlocksAllow(t *testing.T) {
+	lg := audit.NewWriter(brokenDisk{}, audit.Options{})
+	t.Cleanup(func() { lg.Close(context.Background()) })
+	up := startUpstream(t, jsonHandler(msgJSON("tool_use", tu("ok_tool", `{"a":"KEEP"}`))))
+	addr, _ := startProxyObs(t, up, decFunc(byName), func(c *Config) { c.Audit = lg })
+	r := doRaw(t, addr, "POST", "/v1/messages", nil, strings.Replace(reqBody, "%t", "false", 1))
+	if strings.Contains(r.body, "KEEP") || !strings.Contains(r.body, "fail-closed:audit") {
+		t.Errorf("an ALLOW whose record could not be written was forwarded:\n%s", r.body)
 	}
 }

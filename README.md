@@ -31,6 +31,7 @@ and SDK, and the OpenTelemetry stdout exporter). MIT licensed.
 ```sh
 go build -o agent-guard ./cmd/agent-guard
 cp examples/policy.yaml policy.yaml            # edit it
+mkdir -p -m 700 ~/.agent-guard                 # the proxy does not create directories
 ./agent-guard -config policy.yaml -audit-log ~/.agent-guard/audit.jsonl
 ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude
 ```
@@ -77,7 +78,8 @@ never authorised by a mention.
 Anything unexpected blocks the call: policy error, unparseable tool input, decision timeout,
 a panicking or overloaded decider, a malformed upstream response, an oversized stream, an SSE
 event whose name disagrees with its payload, a tool-call limit, or a failure to write the audit
-record (an ALLOW whose audit record cannot be written becomes BLOCK).
+record (an ALLOW is only released after its audit record has been *written*; if the write fails
+or does not finish within the decision timeout, it becomes BLOCK).
 
 ## Audit log
 
@@ -90,8 +92,9 @@ One JSON object per line:
 ```
 
 It never contains headers, API keys or full request bodies. `args_preview` is capped at 256
-bytes and redacted on a best-effort basis (secret-looking keys, common token formats, URL
-credentials, `NAME_KEY=value` assignments, and long high-entropy words). **Redaction can miss
+bytes (inputs over 64 KiB get a placeholder) and redacted on a best-effort basis (secret-looking
+keys, common token formats, Basic/Bearer credentials, URL credentials, `--password x`-style
+options, `curl -u`, `NAME_KEY=value` assignments, and long high-entropy words). **Redaction can miss
 secrets**; use `-audit-preview=false` if that matters, and protect the file. The log is not
 tamper-evident.
 
@@ -143,7 +146,9 @@ Be plain about these:
 8. **The upstream.** A compromised or malicious API endpoint is outside the model. Prompt
    injection is mitigated by blocking its effects, not detected.
 9. **Availability.** Fail-closed means a broken policy, full disk or slow sink blocks the
-   agent. Resource limits are best effort, not a denial-of-service defence.
+   agent (each decision waits for its audit write, up to the decision timeout). Resource limits
+   are best effort, not a denial-of-service defence. A telemetry sink that blocks inside
+   `Write` cannot be interrupted; its bounded queue then drops spans.
 10. **Redaction.** Audit previews can leak secrets that do not look like secrets.
 
 ### Known limits of the host and path heuristics
