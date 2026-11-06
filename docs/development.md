@@ -19,6 +19,17 @@ bash scripts/check.sh        # the validation gate
 `go test -race -count=1 ./...`. A change is not done until it passes. If govulncheck reports a
 vulnerability, report it with the affected call path before changing dependencies or the Go version.
 
+## Live test against the real API
+
+`scripts/live-test.sh` runs the proxy against `https://api.anthropic.com` and checks the decisions
+end to end, streaming and not. It costs a few cents (about 15 tiny requests to a small model;
+override with `LIVE_MODEL`). It needs `curl`, `jq` and `python3`. The key comes from
+`ANTHROPIC_API_KEY` or from `~/.config/agent-guard/anthropic-key` (a bare key, or a pasted
+`export ANTHROPIC_API_KEY="..."` line); it is passed to `curl` through a private temporary file
+and never printed. Models are not deterministic, so a failure can be the model rewording a tool
+input; run it again before assuming a proxy bug. Point `LIVE_UPSTREAM` at a local imitation to
+exercise the script itself without spending anything.
+
 ## Layout
 
 | Path | Contents |

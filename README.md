@@ -23,8 +23,11 @@ SDK and the stdout exporter), plus their transitive modules. MIT licensed.
 
 Pre-1.0. The behaviour described here is covered by automated tests that run the real code over
 real loopback sockets against fake upstreams, including the documented Anthropic streaming event
-format. It has **not** been validated against the live Anthropic API or a live Claude Code
-session, so expect rough edges when you first point a real agent at it.
+format. It has also been run against the **live Anthropic API** with a small model, streaming and
+non-streaming (`scripts/live-test.sh`, 17 checks: allow, ask and block decisions, prompt-injection
+shaped input, `count_tokens`, upstream errors, and that the API key never reaches the audit log or
+the proxy log). It has **not** been tried with a live Claude Code session, so expect rough edges
+when you first point a real agent at it.
 
 ## What it supports
 
