@@ -1,8 +1,7 @@
 # Step 5: canary / sensitive egress BLOCK
 
 **Status: implemented** (see `plans/decisions-step-5-6.md`). One commit. No new modules.
-Branch: `improve/tldr-2026-11-09`. Check: gofmt/vet/tests pass; govulncheck needs Go 1.26.11
-(approval asked — GO-2026-6859 in net/http on 1.26.10).
+Branch: `improve/tldr-2026-11-09`. `go.mod` bumped to 1.26.11 for GO-2026-6859 (approved).
 
 ## Goal
 

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.26.10 or newer (the version in `go.mod`).
+- Go 1.26.11 or newer (the version in `go.mod`).
 - [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) for the vulnerability
   stage: `go install golang.org/x/vuln/cmd/govulncheck@latest`.
 - Optional: [`gitleaks`](https://github.com/gitleaks/gitleaks), used by the review scripts to scan

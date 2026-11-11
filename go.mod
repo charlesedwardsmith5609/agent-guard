@@ -1,6 +1,6 @@
 module agent-guard
 
-go 1.26.10
+go 1.26.11
 
 require (
 	go.opentelemetry.io/otel v1.47.0

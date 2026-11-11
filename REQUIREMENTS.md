@@ -1,9 +1,9 @@
 # Requirements and design decisions
 
-Status: **implemented** (phases 1–4 and TLDR 2026-11-09 items on `improve/tldr-2026-11-09`;
-govulncheck clean requires Go ≥ 1.26.11 — see decision below). This file records what was asked
-for and the decisions made along the way. For how the program behaves today, read the
-[README](README.md) and [docs/](docs/); where they differ from this file, they win.
+Status: **implemented** (phases 1–4 and TLDR 2026-11-09 items on `improve/tldr-2026-11-09`).
+This file records what was asked for and the decisions made along the way. For how the program
+behaves today, read the [README](README.md) and [docs/](docs/); where they differ from this
+file, they win.
 
 ## The brief
 
@@ -94,7 +94,7 @@ best suggestion per question was taken. Full record: [`plans/decisions-step-5-6.
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| 17 | Policy option for configured **canary strings**. If a tool call's arguments contain a configured canary token **or** a value matching `sensitive.go` path/host classes, and the call has an **egress channel** (any extracted host, or a message/forum-style tool), the verdict is **BLOCK** and the decision is audited. | Implemented (awaiting clean govulncheck; see below) |
+| 17 | Policy option for configured **canary strings**. If a tool call's arguments contain a configured canary token **or** a value matching `sensitive.go` path/host classes, and the call has an **egress channel** (any extracted host, or a message/forum-style tool), the verdict is **BLOCK** and the decision is audited. | Implemented |
 | 18 | Motivation (docs/comments only): agents shared a private deploy token ~15% of the time when a peer forum asked for it (The Register via TLDR InfoSec, 2026-11-09; https://www.theregister.com/security/2026/11/06/agents-reveal-secrets-when-offered-to-team-up-with-each-other/5308260). | Implemented |
 | 19 | Tests: real loopback listener on `127.0.0.1:0`; fake upstream returning a `tool_use` that contains the canary; deadline on every read; **streaming and non-streaming**. | Implemented |
 
@@ -119,6 +119,8 @@ best suggestion per question was taken. Full record: [`plans/decisions-step-5-6.
     tool, sensitive, host, scope; strictest verdict wins.
 24. **Ownership.** Engine immutable after Parse; no new mutex. Decide scans check `ctx.Err()`
     periodically. Audit holds a copy of canary strings for redaction only.
+25. **Go toolchain.** Bumped `go.mod` from 1.26.10 to **1.26.11** (approved) so govulncheck is
+    clean for GO-2026-6859 (`net/http` MaxBytesReader header race).
 
 ### Item 2 — BishopFox Claude sandbox lessons (docs only)
 

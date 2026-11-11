@@ -43,7 +43,7 @@ sub-agents, MCP), extended thinking and long sessions have not been tried, so ex
 
 ## Quick start
 
-Requires Go 1.26.10 or newer.
+Requires Go 1.26.11 or newer.
 
 ```sh
 go build -o agent-guard ./cmd/agent-guard
