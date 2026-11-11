@@ -13,7 +13,8 @@ arrived in step 3.)
 | `step-2c.md` | Resource hardening (limits, deadlines, connection cap) and review fixes |
 | `step-3.md` | The rules engine, including the known limits of the host heuristics |
 | `step-4.md` | The audit log and OpenTelemetry |
-| `step-5.md` | Canary / sensitive egress BLOCK (proposed; awaiting design answers) |
-| `step-6.md` | BishopFox Claude sandbox lessons in the threat model (docs only; proposed) |
+| `step-5.md` | Canary / sensitive egress BLOCK (decisions locked; awaiting implement) |
+| `step-6.md` | BishopFox Claude sandbox lessons in the threat model (docs only; locked) |
+| `decisions-step-5-6.md` | Cross-model review record and locked answers for steps 5–6 |
 
 The requirements and the decisions behind them are in [`../REQUIREMENTS.md`](../REQUIREMENTS.md).

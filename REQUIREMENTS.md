@@ -81,50 +81,48 @@ during that time without asking, and are the ones most worth reviewing.
   with the `Read` and `Bash` tools (`scripts/live-claude-test.sh`) have been exercised; the
   interactive interface, other tools, extended thinking and long sessions have not.
 
-## Proposed (2026-11-09 TLDR) — confirm before implementing
+## Proposed (2026-11-09 TLDR) — decisions locked; awaiting implement approval
 
 Source brief: egress canary rule + BishopFox sandbox lessons. Branch: `improve/tldr-2026-11-09`.
 One commit per item. Go stdlib plus existing modules only. Done means `bash scripts/check.sh`
-passes (gofmt, go vet, govulncheck, `go test -race -count=1`). Ask before any design decision.
+passes (gofmt, go vet, govulncheck, `go test -race -count=1`).
+
+Design decisions were drafted, cross-reviewed by a different model (GPT-5.6 Sol high), and the
+best suggestion per question was taken. Full record: [`plans/decisions-step-5-6.md`](plans/decisions-step-5-6.md).
+**No code until Charles approves implementation.**
 
 ### Item 1 — Canary / sensitive egress BLOCK (code + tests + policy docs)
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| 17 | Policy option for configured **canary strings**. If a tool call's arguments contain a configured canary token **or** a value matching `sensitive.go` patterns, and the call is headed to a **non-allowed host** or a **message/forum-style tool**, the verdict is **BLOCK** and the decision is audited. | Proposed |
-| 18 | Motivation (docs/comments only): agents shared a private deploy token ~15% of the time when a peer forum asked for it (The Register via TLDR InfoSec, 2026-11-09; https://www.theregister.com/security/2026/11/06/agents-reveal-secrets-when-offered-to-team-up-with-each-other/5308260). | Proposed |
-| 19 | Tests: real loopback listener on `127.0.0.1:0`; fake upstream returning a `tool_use` that contains the canary; deadline on every read; **streaming and non-streaming**. | Proposed |
+| 17 | Policy option for configured **canary strings**. If a tool call's arguments contain a configured canary token **or** a value matching `sensitive.go` path/host classes, and the call has an **egress channel** (any extracted host, or a message/forum-style tool), the verdict is **BLOCK** and the decision is audited. | Decisions locked |
+| 18 | Motivation (docs/comments only): agents shared a private deploy token ~15% of the time when a peer forum asked for it (The Register via TLDR InfoSec, 2026-11-09; https://www.theregister.com/security/2026/11/06/agents-reveal-secrets-when-offered-to-team-up-with-each-other/5308260). | Decisions locked |
+| 19 | Tests: real loopback listener on `127.0.0.1:0`; fake upstream returning a `tool_use` that contains the canary; deadline on every read; **streaming and non-streaming**. | Decisions locked |
 
-**Open design questions (do not guess):**
+### Locked decisions (item 1)
 
-1. **YAML shape.** Prefer something like `canaries: ["…"]` at the top level, or a nested block
-   (e.g. `egress.canaries` / `egress.forum_tools`)? Optional key = feature off?
-2. **Canary match.** Exact substring in any string value of the tool input? Case-sensitive?
-   Minimum length? Reject empty / very short canaries at load time?
-3. **"matching sensitive.go patterns".** Today `sensitive.go` classifies *paths/hosts*
-   (`proc_environ`, `ssh`, `dotenv`, `metadata`), not secret-shaped *values*. Does this mean:
-   (A) if extract finds a path/host in those classes **and** the call is egressing (non-allowed
-   host or forum tool), force BLOCK under a canary/egress rule; or (B) something else (new
-   value patterns)? Note (A) overlaps existing `sensitive:*` ASK/BLOCK-on-any-access.
-4. **Message/forum-style tools.** Configurable name/prefix list in policy? Built-in defaults
-   (which names)? Heuristic on argument keys (`message`, `body`, …)?
-5. **Non-allowed host.** Does a **user mention** still authorize the host for this rule, or is
-   canary egress blocked even when the host was mentioned? Canary to an **allowlisted** host
-   (e.g. `curl`/`WebFetch` to `github.com`) — allowed by this rule as written, or should any
-   network destination with a canary block?
-6. **Rule name / reason.** e.g. `canary-egress` vs `egress:canary`; should `reason` name which
-   canary matched (risk: audit leak) or only that a canary matched?
-7. **Evaluation order.** New finding among existing rules; strictest wins (BLOCK). Among equal
-   BLOCKs, first in order — where does this rule sit relative to tool / sensitive / host / scope?
-
-**Shared state:** none new expected — canary list lives on the immutable `Engine` after `Parse`
-(same ownership as today's policy: no mutex, safe for concurrent `Decide`).
+17. **YAML.** Optional top-level `canaries` and `forum_tools` (flat, like `tools`). Omit or `[]`
+    disables that leg; sensitive∧egress still applies when classifications hit.
+18. **Match.** Case-sensitive literal substring in parsed JSON string values; canary length
+    16–256 **bytes**; reject leading/trailing whitespace in the configured token; max 64
+    canaries; max 64 `forum_tools` patterns (same `*` rules as `tools`).
+19. **Sensitive patterns.** (A) `pathClass` / `hostClass` hit plus egress channel → BLOCK as
+    `egress:sensitive:<class>`, even if `sensitive.<class>` is `ask`. No new value regexes.
+20. **Forum-style tools.** Name matches `forum_tools` **or** CamelCase/delimiter fragments
+    include `send|post|publish|message|comment|reply`, or (`create|update|add` with
+    `issue|discussion|pull_request|pullrequest|pr`). Document over-match risk.
+21. **Egress channel.** Any extracted host (allowlist and user mention **ignored** for this
+    rule) **or** forum-style tool. Intentional strengthening vs brief “non-allowed host”.
+22. **Rules / reasons.** `egress:canary` / `egress:sensitive:<class>`; reasons never include
+    matched secrets/paths beyond safe class names. Configured canaries are also redacted in
+    audit previews (read-only copy from Engine to audit at startup).
+23. **Order.** Findings evaluated for reporting: `egress:canary`, `egress:sensitive:<class>`,
+    tool, sensitive, host, scope; strictest verdict wins.
+24. **Ownership.** Engine immutable after Parse; no new mutex. Decide scans check `ctx.Err()`
+    periodically. Audit holds a copy of canary strings for redaction only.
 
 ### Item 2 — BishopFox Claude sandbox lessons (docs only)
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| 20 | Add a **"Lessons from BishopFox's Claude sandbox write-up"** section to the threat model (README): an agent with process-level access can read process memory and make network interfaces; **agent-guard is not a sandbox**. Cite https://bishopfox.com/blog/journey-into-claudes-sandbox (TLDR InfoSec 2026-11-09). Docs only; no code. | Proposed |
-
-**Open question:** place as a new numbered item under "What it does NOT protect against", a
-short subsection under Threat model, or both?
+| 25 | Add **"Lessons from BishopFox's Claude sandbox write-up"** as **new numbered item 11** under README “What it does NOT protect against”: process-level access can read process memory and make network interfaces; **agent-guard is not a sandbox**. Cite https://bishopfox.com/blog/journey-into-claudes-sandbox (TLDR InfoSec 2026-11-09). Docs only. | Decisions locked |
