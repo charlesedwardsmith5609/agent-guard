@@ -80,6 +80,7 @@ verdict wins (BLOCK over ASK over ALLOW).
 
 | Rule | Verdict |
 |------|---------|
+| `egress:canary` / `egress:sensitive:<class>`: configured canary or sensitive path/host classification on an egress channel (any extracted host, or a message/forum-style tool) | BLOCK |
 | `tool-not-declared`: the tool is not in `tools` | BLOCK |
 | `host-not-allowed`: a host in the call is not in `hosts` and not mentioned in the user's own messages | BLOCK |
 | `path-out-of-scope`: a structured path argument (such as `file_path`) is outside `paths.allow` | BLOCK |

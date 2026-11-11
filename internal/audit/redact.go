@@ -38,7 +38,15 @@ var (
 
 // redactString removes credentials from free text: known token shapes, URL userinfo, secret-looking
 // shell assignments, and long mixed letter/digit words with high entropy (unknown formats).
-func redactString(s string) string {
+func redactString(s string) string { return redactWithCanaries(s, nil) }
+
+// redactWithCanaries is redactString plus literal substring redaction of configured canaries.
+func redactWithCanaries(s string, canaries []string) string {
+	for _, c := range canaries {
+		if c != "" {
+			s = strings.ReplaceAll(s, c, redacted)
+		}
+	}
 	for _, re := range tokenPatterns {
 		s = re.ReplaceAllString(s, redacted)
 	}
@@ -108,7 +116,7 @@ func looksRandom(w string) bool {
 	return h >= 3.5
 }
 
-func redactValue(v any) any {
+func redactValue(v any, canaries []string) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
@@ -116,24 +124,24 @@ func redactValue(v any) any {
 			if secretKey.MatchString(k) {
 				out[k] = redacted
 			} else {
-				out[k] = redactValue(val)
+				out[k] = redactValue(val, canaries)
 			}
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i, e := range t {
-			out[i] = redactValue(e)
+			out[i] = redactValue(e, canaries)
 		}
 		return out
 	case string:
-		return redactString(t)
+		return redactWithCanaries(t, canaries)
 	}
 	return v
 }
 
 // preview renders the tool input as compact, redacted JSON of at most max bytes.
-func preview(input json.RawMessage, max int) string {
+func preview(input json.RawMessage, max int, canaries []string) string {
 	if len(input) > previewInputMax {
 		return "[too large to preview]" // bound CPU and memory on the request path
 	}
@@ -143,7 +151,7 @@ func preview(input json.RawMessage, max int) string {
 	if err := dec.Decode(&v); err != nil {
 		return "[unparseable]"
 	}
-	b, err := json.Marshal(redactValue(v))
+	b, err := json.Marshal(redactValue(v, canaries))
 	if err != nil {
 		return "[unparseable]"
 	}

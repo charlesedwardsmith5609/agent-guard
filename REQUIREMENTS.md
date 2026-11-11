@@ -1,9 +1,9 @@
 # Requirements and design decisions
 
-Status: **implemented** (all four phases). **Proposed additions below (2026-11-09 TLDR) await
-confirmation before any code.** This file records what was asked for and the decisions made along
-the way. For how the program behaves today, read the [README](README.md) and [docs/](docs/);
-where they differ from this file, they win.
+Status: **implemented** (phases 1–4; TLDR 2026-11-09 item 1 in progress on
+`improve/tldr-2026-11-09`). This file records what was asked for and the decisions made along the
+way. For how the program behaves today, read the [README](README.md) and [docs/](docs/); where
+they differ from this file, they win.
 
 ## The brief
 
@@ -81,7 +81,7 @@ during that time without asking, and are the ones most worth reviewing.
   with the `Read` and `Bash` tools (`scripts/live-claude-test.sh`) have been exercised; the
   interactive interface, other tools, extended thinking and long sessions have not.
 
-## Proposed (2026-11-09 TLDR) — decisions locked; awaiting implement approval
+## Proposed (2026-11-09 TLDR)
 
 Source brief: egress canary rule + BishopFox sandbox lessons. Branch: `improve/tldr-2026-11-09`.
 One commit per item. Go stdlib plus existing modules only. Done means `bash scripts/check.sh`
@@ -89,15 +89,14 @@ passes (gofmt, go vet, govulncheck, `go test -race -count=1`).
 
 Design decisions were drafted, cross-reviewed by a different model (GPT-5.6 Sol high), and the
 best suggestion per question was taken. Full record: [`plans/decisions-step-5-6.md`](plans/decisions-step-5-6.md).
-**No code until Charles approves implementation.**
 
 ### Item 1 — Canary / sensitive egress BLOCK (code + tests + policy docs)
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| 17 | Policy option for configured **canary strings**. If a tool call's arguments contain a configured canary token **or** a value matching `sensitive.go` path/host classes, and the call has an **egress channel** (any extracted host, or a message/forum-style tool), the verdict is **BLOCK** and the decision is audited. | Decisions locked |
-| 18 | Motivation (docs/comments only): agents shared a private deploy token ~15% of the time when a peer forum asked for it (The Register via TLDR InfoSec, 2026-11-09; https://www.theregister.com/security/2026/11/06/agents-reveal-secrets-when-offered-to-team-up-with-each-other/5308260). | Decisions locked |
-| 19 | Tests: real loopback listener on `127.0.0.1:0`; fake upstream returning a `tool_use` that contains the canary; deadline on every read; **streaming and non-streaming**. | Decisions locked |
+| 17 | Policy option for configured **canary strings**. If a tool call's arguments contain a configured canary token **or** a value matching `sensitive.go` path/host classes, and the call has an **egress channel** (any extracted host, or a message/forum-style tool), the verdict is **BLOCK** and the decision is audited. | Implemented (awaiting clean govulncheck; see below) |
+| 18 | Motivation (docs/comments only): agents shared a private deploy token ~15% of the time when a peer forum asked for it (The Register via TLDR InfoSec, 2026-11-09; https://www.theregister.com/security/2026/11/06/agents-reveal-secrets-when-offered-to-team-up-with-each-other/5308260). | Implemented |
+| 19 | Tests: real loopback listener on `127.0.0.1:0`; fake upstream returning a `tool_use` that contains the canary; deadline on every read; **streaming and non-streaming**. | Implemented |
 
 ### Locked decisions (item 1)
 

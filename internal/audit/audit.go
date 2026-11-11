@@ -44,8 +44,9 @@ func RedactID(s string) string { return redactString(policy.SafeID(s)) }
 
 // Options configures a Logger.
 type Options struct {
-	QueueSize int  // records buffered before Observe starts failing (default 4096)
-	NoPreview bool // record only the argument hash
+	QueueSize int      // records buffered before Observe starts failing (default 4096)
+	NoPreview bool     // record only the argument hash
+	Canaries  []string // opaque policy canaries; redacted from previews and reasons (copied)
 }
 
 var (
@@ -141,6 +142,11 @@ func newLogger(w io.Writer, opt Options) *Logger {
 	if opt.QueueSize <= 0 {
 		opt.QueueSize = defaultQueue
 	}
+	if n := len(opt.Canaries); n > 0 {
+		cp := make([]string, n)
+		copy(cp, opt.Canaries)
+		opt.Canaries = cp
+	}
 	l := &Logger{opt: opt, out: w, queue: make(chan *item, opt.QueueSize), done: make(chan struct{})}
 	go l.run()
 	return l
@@ -194,13 +200,13 @@ func (l *Logger) record(e policy.Event) Record {
 		ToolUseID:  RedactID(e.Call.ID),
 		Decision:   string(e.Decision.Verdict),
 		Rule:       RedactID(e.Decision.Rule),
-		Reason:     truncate(redactString(e.Decision.Reason), reasonMax),
+		Reason:     truncate(redactWithCanaries(e.Decision.Reason, l.opt.Canaries), reasonMax),
 		ArgsSHA256: hex.EncodeToString(sum[:]),
 		LatencyMS:  float64(e.End.Sub(e.Start)) / float64(time.Millisecond),
 		Stream:     e.Stream,
 	}
 	if !l.opt.NoPreview {
-		r.ArgsPreview = preview(e.Call.Input, previewMax)
+		r.ArgsPreview = preview(e.Call.Input, previewMax, l.opt.Canaries)
 	}
 	return r
 }

@@ -20,6 +20,10 @@ paths:                      # required
 sensitive:                  # optional
   ssh: block
   metadata: block
+canaries:                   # optional; omit or [] disables token matching
+  - "AG_CANARY_DEPLOY_replace_me"
+forum_tools:                # optional; extra message/forum tool patterns
+  - "mcp__slack__*"
 ```
 
 There is a longer commented file in [`examples/policy.yaml`](../examples/policy.yaml).
@@ -81,25 +85,45 @@ Unknown keys, or values other than `ask`/`block`, are errors.
 These checks apply to **any access**, not only reads: agent-guard cannot tell a read from a write
 inside a shell command.
 
+### `canaries`
+
+Optional. A list of opaque strings (16–256 bytes each, at most 64). Matching is a **case-sensitive
+substring** of every string value in the tool input. Leading or trailing whitespace in a canary is
+rejected at load time. Omit the key or use `[]` to disable token matching.
+
+### `forum_tools`
+
+Optional. Tool name patterns (exact or trailing `*`, same rules as `tools`, at most 64) treated as
+message/forum-style egress channels for the canary/sensitive-egress rule. A tool is also treated as
+forum-style when its CamelCase/delimiter name fragments include `send`, `post`, `publish`,
+`message`, `comment`, or `reply`, or combine `create`/`update`/`add` with
+`issue`/`discussion`/`pull_request`/`pullrequest`/`pr`. That heuristic can over-match (for example
+a tool whose name contains `post`).
+
 ## How a call is judged
 
-For each `tool_use` block, in this order:
+For each `tool_use` block, findings are collected in this order (first equal-rank BLOCK wins):
 
-1. The tool name is checked against `tools`. A miss is BLOCK, rule `tool-not-declared`.
-2. The tool's input (a JSON object) is scanned for hosts and paths. If it is not a JSON object, is
+1. The tool's input (a JSON object) is scanned for hosts and paths. If it is not a JSON object, is
    larger than 1 MiB, is nested more than 16 levels deep, or names more than 256 distinct hosts or
    1024 distinct paths, that is an error and the call is blocked (`fail-closed:error`).
-3. Every sensitive path or host found gives the verdict configured for its class, rule
+2. **Egress canary / sensitive.** An *egress channel* is any extracted host (allowlist and user
+   mentions are ignored here) or a forum-style tool (`forum_tools` or the name heuristic). If the
+   call has an egress channel and arguments contain a configured canary → BLOCK, rule
+   `egress:canary`. If they contain a sensitive path/host classification → BLOCK, rule
+   `egress:sensitive:<class>` (even when `sensitive.<class>` is only `ask`). Reasons never repeat
+   the canary value; configured canaries are also redacted from audit previews.
+3. The tool name is checked against `tools`. A miss is BLOCK, rule `tool-not-declared`.
+4. Every sensitive path or host found gives the verdict configured for its class, rule
    `sensitive:<class>` (`sensitive:ssh`, `sensitive:dotenv`, ...).
-4. Every host found that is not in `hosts` and not mentioned by the user is BLOCK, rule
+5. Every host found that is not in `hosts` and not mentioned by the user is BLOCK, rule
    `host-not-allowed`.
-5. Every structured path outside `paths.allow` is BLOCK, rule `path-out-of-scope`.
-6. If nothing matched, ALLOW, rule `allow`.
+6. Every structured path outside `paths.allow` is BLOCK, rule `path-out-of-scope`.
+7. If nothing matched, ALLOW, rule `allow`.
 
 **All rules are evaluated and the strictest verdict wins** (BLOCK, then ASK, then ALLOW). The rule
-reported is the first one, in the order above, that produced that verdict. So a call that reads
-`~/.ssh/id_rsa` with `file_path` outside your allowed directories is BLOCK (`path-out-of-scope`),
-even though `ssh` alone would only ask.
+reported is the first one, in the order above, that produced that verdict. So a call that posts
+`~/.ssh/id_rsa` toward a host is BLOCK (`egress:sensitive:ssh`) even if `ssh` alone would only ask.
 
 ## Which arguments are checked
 
@@ -193,6 +217,8 @@ Find the call in the audit log (`jq 'select(.decision != "ALLOW")' audit.jsonl`)
 
 | Rule | Meaning | What to do |
 |------|---------|------------|
+| `egress:canary` | A configured canary appeared in arguments on an egress channel | Expected if you planted a canary; rotate the real secret if this was not a drill |
+| `egress:sensitive:<class>` | A sensitive path/host classification on an egress channel | Treat like an exfil attempt; do not rely on ASK alone for outbound tools |
 | `tool-not-declared` | The tool is not in `tools` | Add it, if you want the agent to have it |
 | `host-not-allowed` | A host in the call is not in `hosts` and you did not mention it | Add the host, or name it in your message. Check `reason`: it might be a file name read as a host |
 | `path-out-of-scope` | A path argument is outside `paths.allow` | Add the directory, or fix `workdir` if a relative path resolved somewhere unexpected |
