@@ -383,7 +383,7 @@ data: {"type":"message_stop"}
 			if strings.Contains(string(raw), canary) {
 				t.Fatalf("canary reached audit log:\n%s", raw)
 			}
-			if !strings.Contains(string(raw), `"rule":"egress:canary"`) && !strings.Contains(string(raw), `"decision":"BLOCK"`) {
+			if !strings.Contains(string(raw), `"rule":"egress:canary"`) || !strings.Contains(string(raw), `"decision":"BLOCK"`) {
 				t.Fatalf("audit missing egress:canary BLOCK:\n%s", raw)
 			}
 		})
