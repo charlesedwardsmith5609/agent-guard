@@ -171,6 +171,11 @@ and the usual credential locations.
    are best effort, not a denial-of-service defence.
 10. **Secrets in the audit log.** Argument previews are redacted heuristically and can leak
     secrets that do not look like secrets. Use `-audit-preview=false` to record hashes only.
+11. **Lessons from BishopFox's Claude sandbox write-up.** An agent with process-level access can
+    read process memory and create network interfaces. agent-guard inspects model `tool_use`
+    blocks only; it is **not a sandbox** and does not confine the harness or the OS. See
+    [BishopFox, “A Journey into Claude's Sandbox”](https://bishopfox.com/blog/journey-into-claudes-sandbox)
+    (TLDR InfoSec 2026-11-09).
 
 ## Architecture
 

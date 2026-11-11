@@ -1,9 +1,9 @@
 # Requirements and design decisions
 
-Status: **implemented** (phases 1–4; TLDR 2026-11-09 item 1 in progress on
-`improve/tldr-2026-11-09`). This file records what was asked for and the decisions made along the
-way. For how the program behaves today, read the [README](README.md) and [docs/](docs/); where
-they differ from this file, they win.
+Status: **implemented** (phases 1–4 and TLDR 2026-11-09 items on `improve/tldr-2026-11-09`;
+govulncheck clean requires Go ≥ 1.26.11 — see decision below). This file records what was asked
+for and the decisions made along the way. For how the program behaves today, read the
+[README](README.md) and [docs/](docs/); where they differ from this file, they win.
 
 ## The brief
 
@@ -124,4 +124,4 @@ best suggestion per question was taken. Full record: [`plans/decisions-step-5-6.
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| 25 | Add **"Lessons from BishopFox's Claude sandbox write-up"** as **new numbered item 11** under README “What it does NOT protect against”: process-level access can read process memory and make network interfaces; **agent-guard is not a sandbox**. Cite https://bishopfox.com/blog/journey-into-claudes-sandbox (TLDR InfoSec 2026-11-09). Docs only. | Decisions locked |
+| 25 | Add **"Lessons from BishopFox's Claude sandbox write-up"** as **new numbered item 11** under README “What it does NOT protect against”: process-level access can read process memory and make network interfaces; **agent-guard is not a sandbox**. Cite https://bishopfox.com/blog/journey-into-claudes-sandbox (TLDR InfoSec 2026-11-09). Docs only. | Implemented |

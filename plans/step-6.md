@@ -1,8 +1,7 @@
 # Step 6: BishopFox Claude sandbox lessons (docs only)
 
-**Status: decisions locked** (placement = new numbered item 11 under “What it does NOT
-protect against”). Awaiting Charles’s go-ahead. Docs only; one commit.
-Branch: `improve/tldr-2026-11-09`.
+**Status: implemented** (placement = new numbered item 11 under “What it does NOT
+protect against”). Docs only; one commit. Branch: `improve/tldr-2026-11-09`.
 
 ## Goal
 
