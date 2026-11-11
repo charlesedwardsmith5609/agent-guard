@@ -1,8 +1,9 @@
 # Requirements and design decisions
 
-Status: **implemented** (all four phases). This file records what was asked for and the decisions
-made along the way. For how the program behaves today, read the [README](README.md) and
-[docs/](docs/); where they differ from this file, they win.
+Status: **implemented** (phases 1–4 and TLDR 2026-11-09 items on `improve/tldr-2026-11-09`).
+This file records what was asked for and the decisions made along the way. For how the program
+behaves today, read the [README](README.md) and [docs/](docs/); where they differ from this
+file, they win.
 
 ## The brief
 
@@ -79,3 +80,50 @@ during that time without asking, and are the ones most worth reviewing.
 - Broader live validation. The live API (`scripts/live-test.sh`) and a headless Claude Code session
   with the `Read` and `Bash` tools (`scripts/live-claude-test.sh`) have been exercised; the
   interactive interface, other tools, extended thinking and long sessions have not.
+
+## Proposed (2026-11-09 TLDR)
+
+Source brief: egress canary rule + BishopFox sandbox lessons. Branch: `improve/tldr-2026-11-09`.
+One commit per item. Go stdlib plus existing modules only. Done means `bash scripts/check.sh`
+passes (gofmt, go vet, govulncheck, `go test -race -count=1`).
+
+Design decisions were drafted, cross-reviewed by a different model (GPT-5.6 Sol high), and the
+best suggestion per question was taken. Full record: [`plans/decisions-step-5-6.md`](plans/decisions-step-5-6.md).
+
+### Item 1 — Canary / sensitive egress BLOCK (code + tests + policy docs)
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| 17 | Policy option for configured **canary strings**. If a tool call's arguments contain a configured canary token **or** a value matching `sensitive.go` path/host classes, and the call has an **egress channel** (any extracted host, or a message/forum-style tool), the verdict is **BLOCK** and the decision is audited. | Implemented |
+| 18 | Motivation (docs/comments only): agents shared a private deploy token ~15% of the time when a peer forum asked for it (The Register via TLDR InfoSec, 2026-11-09; https://www.theregister.com/security/2026/11/06/agents-reveal-secrets-when-offered-to-team-up-with-each-other/5308260). | Implemented |
+| 19 | Tests: real loopback listener on `127.0.0.1:0`; fake upstream returning a `tool_use` that contains the canary; deadline on every read; **streaming and non-streaming**. | Implemented |
+
+### Locked decisions (item 1)
+
+17. **YAML.** Optional top-level `canaries` and `forum_tools` (flat, like `tools`). Omit or `[]`
+    disables that leg; sensitive∧egress still applies when classifications hit.
+18. **Match.** Case-sensitive literal substring in parsed JSON string values; canary length
+    16–256 **bytes**; reject leading/trailing whitespace in the configured token; max 64
+    canaries; max 64 `forum_tools` patterns (same `*` rules as `tools`).
+19. **Sensitive patterns.** (A) `pathClass` / `hostClass` hit plus egress channel → BLOCK as
+    `egress:sensitive:<class>`, even if `sensitive.<class>` is `ask`. No new value regexes.
+20. **Forum-style tools.** Name matches `forum_tools` **or** CamelCase/delimiter fragments
+    include `send|post|publish|message|comment|reply`, or (`create|update|add` with
+    `issue|discussion|pull_request|pullrequest|pr`). Document over-match risk.
+21. **Egress channel.** Any extracted host (allowlist and user mention **ignored** for this
+    rule) **or** forum-style tool. Intentional strengthening vs brief “non-allowed host”.
+22. **Rules / reasons.** `egress:canary` / `egress:sensitive:<class>`; reasons never include
+    matched secrets/paths beyond safe class names. Configured canaries are also redacted in
+    audit previews (read-only copy from Engine to audit at startup).
+23. **Order.** Findings evaluated for reporting: `egress:canary`, `egress:sensitive:<class>`,
+    tool, sensitive, host, scope; strictest verdict wins.
+24. **Ownership.** Engine immutable after Parse; no new mutex. Decide scans check `ctx.Err()`
+    periodically. Audit holds a copy of canary strings for redaction only.
+25. **Go toolchain.** Bumped `go.mod` from 1.26.10 to **1.26.11** (approved) so govulncheck is
+    clean for GO-2026-6859 (`net/http` MaxBytesReader header race).
+
+### Item 2 — BishopFox Claude sandbox lessons (docs only)
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| 25 | Add **"Lessons from BishopFox's Claude sandbox write-up"** as **new numbered item 11** under README “What it does NOT protect against”: process-level access can read process memory and make network interfaces; **agent-guard is not a sandbox**. Cite https://bishopfox.com/blog/journey-into-claudes-sandbox (TLDR InfoSec 2026-11-09). Docs only. | Implemented |

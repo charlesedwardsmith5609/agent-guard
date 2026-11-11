@@ -43,6 +43,14 @@ func TestParseConfig(t *testing.T) {
 		{"short tool prefix", "tools: ['ab*']\nhosts: []\npaths:\n  allow: []\n", "at least 3"},
 		{"mid-string star", "tools: ['mc*p']\nhosts: []\npaths:\n  allow: []\n", "only allowed at the end"},
 		{"empty tool name", "tools: ['']\nhosts: []\npaths:\n  allow: []\n", "invalid tool"},
+		{"valid canaries and forum_tools", ok("canaries: [\"AG_CANARY_DEPLOY_00\"]\nforum_tools: [\"mcp__slack__*\"]\n"), ""},
+		{"canary too short", ok("canaries: [\"short-canary-1\"]\n"), "16"},
+		{"canary leading space", ok("canaries: [\" AG_CANARY_DEPLOY_0\"]\n"), "whitespace"},
+		{"canary trailing space", ok("canaries: [\"AG_CANARY_DEPLOY_0 \"]\n"), "whitespace"},
+		{"empty canaries list", ok("canaries: []\n"), ""},
+		{"too many canaries", ok("canaries: [" + manyCanariesYAML(65) + "]\n"), "at most 64 canaries"},
+		{"forum_tools short prefix", ok("forum_tools: ['ab*']\n"), "at least 3"},
+		{"empty forum_tools", ok("forum_tools: []\n"), ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,6 +101,50 @@ func TestLoadRejectsHugeFile(t *testing.T) {
 	if _, err := Load(f); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("got %v", err)
 	}
+}
+
+func manyCanariesYAML(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		// 16-byte unique tokens: AG_CANARY_ + zero-padded index
+		b.WriteString(`"`)
+		b.WriteString("AG_CANARY_")
+		b.WriteString(strings.Repeat("0", 6-len(itoa(i))))
+		b.WriteString(itoa(i))
+		b.WriteString(`"`)
+	}
+	return b.String()
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var d []byte
+	for i > 0 {
+		d = append([]byte{byte('0' + i%10)}, d...)
+		i /= 10
+	}
+	return string(d)
+}
+
+func TestCanariesCopy(t *testing.T) {
+	e := newEngine(t, okCfg(`canaries: ["AG_CANARY_DEPLOY_00"]`))
+	got := e.Canaries()
+	if len(got) != 1 || got[0] != "AG_CANARY_DEPLOY_00" {
+		t.Fatalf("Canaries = %v", got)
+	}
+	got[0] = "mutated-not-engine"
+	if e.Canaries()[0] != "AG_CANARY_DEPLOY_00" {
+		t.Fatal("Canaries must return a copy")
+	}
+}
+
+func okCfg(extra string) string {
+	return "tools: [Bash]\nhosts: [github.com]\npaths:\n  allow: [/work]\n" + extra
 }
 
 func TestLoad(t *testing.T) {

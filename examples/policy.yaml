@@ -41,3 +41,14 @@ sensitive:
   ssh: ask              # any .ssh path
   dotenv: ask           # .env and .env.*
   metadata: block       # cloud metadata endpoint (169.254.169.254 and spellings)
+
+# Optional canary tokens (16–256 bytes each). If a tool call's arguments contain one of these
+# (or a sensitive path/host classification) and the call has an egress channel — any extracted
+# host, or a message/forum-style tool — the call is BLOCKED as egress:canary /
+# egress:sensitive:<class>. Plant a unique string in a deploy token / secret you care about.
+# canaries:
+#   - "AG_CANARY_DEPLOY_replace_me"
+# Optional extra forum tool name patterns (exact or trailing *). Names are also matched by a
+# built-in heuristic (send/post/message/…; create|update|add + issue|discussion|pr).
+# forum_tools:
+#   - "mcp__slack__*"

@@ -85,7 +85,7 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("loading %s: %w", o.config, err)
 	}
-	auditLog, err := audit.Open(o.auditLog, audit.Options{NoPreview: !o.auditPreview})
+	auditLog, err := audit.Open(o.auditLog, audit.Options{NoPreview: !o.auditPreview, Canaries: engine.Canaries()})
 	if err != nil {
 		return nil, nil, nil, err
 	}

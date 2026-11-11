@@ -25,7 +25,9 @@ type fileConfig struct {
 		Workdir string    `yaml:"workdir"`
 		Allow   *[]string `yaml:"allow"`
 	} `yaml:"paths"`
-	Sensitive map[string]string `yaml:"sensitive"`
+	Sensitive  map[string]string `yaml:"sensitive"`
+	Canaries   *[]string         `yaml:"canaries"`
+	ForumTools *[]string         `yaml:"forum_tools"`
 }
 
 // Sensitive classes, usable as keys under `sensitive:` in the config.
@@ -54,9 +56,18 @@ type Engine struct {
 	workdir     string
 	home        string
 	sensitive   map[string]policy.Verdict
+	canaries    []string // opaque tokens; substring-matched in tool input strings
+	forumExact  map[string]bool
+	forumPrefix []string
 }
 
-const maxConfigBytes = 1 << 20
+const (
+	maxConfigBytes = 1 << 20
+	minCanaryBytes = 16
+	maxCanaryBytes = 256
+	maxCanaries    = 64
+	maxForumTools  = 64
+)
 
 var hostLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
@@ -102,24 +113,21 @@ func Parse(data []byte, opt Options) (*Engine, error) {
 		}
 		opt.Home = h
 	}
-	e := &Engine{toolsExact: map[string]bool{}, hostsExact: map[string]bool{}, home: path.Clean(opt.Home), sensitive: map[string]policy.Verdict{}}
+	e := &Engine{
+		toolsExact: map[string]bool{}, hostsExact: map[string]bool{}, forumExact: map[string]bool{},
+		home: path.Clean(opt.Home), sensitive: map[string]policy.Verdict{},
+	}
 
 	for _, t := range *fc.Tools {
-		if t == "" || strings.TrimSpace(t) != t {
-			return nil, fmt.Errorf("config: invalid tool name %q", t)
+		exact, prefix, err := parseNamePattern(t, "tool")
+		if err != nil {
+			return nil, err
 		}
-		if strings.HasSuffix(t, "*") {
-			prefix := strings.TrimSuffix(t, "*")
-			if len(prefix) < 3 || strings.Contains(prefix, "*") {
-				return nil, fmt.Errorf("config: tool pattern %q needs a literal prefix of at least 3 characters", t)
-			}
+		if prefix != "" {
 			e.toolsPrefix = append(e.toolsPrefix, prefix)
-			continue
+		} else {
+			e.toolsExact[exact] = true
 		}
-		if strings.Contains(t, "*") {
-			return nil, fmt.Errorf("config: tool pattern %q: * is only allowed at the end", t)
-		}
-		e.toolsExact[t] = true
 	}
 	for _, h := range *fc.Hosts {
 		h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
@@ -176,7 +184,73 @@ func Parse(data []byte, opt Options) (*Engine, error) {
 			return nil, fmt.Errorf("config: sensitive.%s must be ask or block, got %q", class, v)
 		}
 	}
+
+	if fc.Canaries != nil {
+		if len(*fc.Canaries) > maxCanaries {
+			return nil, fmt.Errorf("config: at most %d canaries are allowed", maxCanaries)
+		}
+		seen := map[string]bool{}
+		for _, c := range *fc.Canaries {
+			if c == "" || strings.TrimSpace(c) != c {
+				return nil, fmt.Errorf("config: canary must be non-empty and must not have leading or trailing whitespace")
+			}
+			if len(c) < minCanaryBytes || len(c) > maxCanaryBytes {
+				return nil, fmt.Errorf("config: canary length must be %d–%d bytes, got %d", minCanaryBytes, maxCanaryBytes, len(c))
+			}
+			if seen[c] {
+				return nil, fmt.Errorf("config: duplicate canary")
+			}
+			seen[c] = true
+			e.canaries = append(e.canaries, c)
+		}
+	}
+	if fc.ForumTools != nil {
+		if len(*fc.ForumTools) > maxForumTools {
+			return nil, fmt.Errorf("config: at most %d forum_tools patterns are allowed", maxForumTools)
+		}
+		for _, t := range *fc.ForumTools {
+			exact, prefix, err := parseNamePattern(t, "forum_tools")
+			if err != nil {
+				return nil, err
+			}
+			if prefix != "" {
+				e.forumPrefix = append(e.forumPrefix, prefix)
+			} else {
+				e.forumExact[exact] = true
+			}
+		}
+	}
 	return e, nil
+}
+
+// Canaries returns a copy of the configured canary tokens for audit redaction.
+// The Engine remains the owner of the authoritative list; callers must not mutate the result
+// in a way that is shared back (the slice is a shallow copy of immutable strings).
+func (e *Engine) Canaries() []string {
+	if len(e.canaries) == 0 {
+		return nil
+	}
+	out := make([]string, len(e.canaries))
+	copy(out, e.canaries)
+	return out
+}
+
+// parseNamePattern accepts an exact name or a trailing-* prefix (literal prefix ≥ 3 chars).
+func parseNamePattern(t, kind string) (exact, prefix string, err error) {
+	if t == "" || strings.TrimSpace(t) != t {
+		return "", "", fmt.Errorf("config: invalid %s name %q", kind, t)
+	}
+	if strings.HasSuffix(t, "*") {
+		p := strings.TrimSuffix(t, "*")
+		if len(p) < 3 || strings.Contains(p, "*") {
+			return "", "", fmt.Errorf("config: %s pattern %q needs a literal prefix of at least 3 characters", kind, t)
+		}
+		return "", p, nil
+	}
+	if strings.Contains(t, "*") {
+		return "", "", fmt.Errorf("config: %s pattern %q: * is only allowed at the end", kind, t)
+	}
+	return t, "", nil
 }
 
 // absolute returns a cleaned absolute path for config entries: absolute or ~-prefixed only.

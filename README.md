@@ -43,7 +43,7 @@ sub-agents, MCP), extended thinking and long sessions have not been tried, so ex
 
 ## Quick start
 
-Requires Go 1.26.10 or newer.
+Requires Go 1.26.11 or newer.
 
 ```sh
 go build -o agent-guard ./cmd/agent-guard
@@ -80,6 +80,7 @@ verdict wins (BLOCK over ASK over ALLOW).
 
 | Rule | Verdict |
 |------|---------|
+| `egress:canary` / `egress:sensitive:<class>`: configured canary or sensitive path/host classification on an egress channel (any extracted host, or a message/forum-style tool) | BLOCK |
 | `tool-not-declared`: the tool is not in `tools` | BLOCK |
 | `host-not-allowed`: a host in the call is not in `hosts` and not mentioned in the user's own messages | BLOCK |
 | `path-out-of-scope`: a structured path argument (such as `file_path`) is outside `paths.allow` | BLOCK |
@@ -170,6 +171,11 @@ and the usual credential locations.
    are best effort, not a denial-of-service defence.
 10. **Secrets in the audit log.** Argument previews are redacted heuristically and can leak
     secrets that do not look like secrets. Use `-audit-preview=false` to record hashes only.
+11. **Lessons from BishopFox's Claude sandbox write-up.** An agent with process-level access can
+    read process memory and create network interfaces. agent-guard inspects model `tool_use`
+    blocks only; it is **not a sandbox** and does not confine the harness or the OS. See
+    [BishopFox, “A Journey into Claude's Sandbox”](https://bishopfox.com/blog/journey-into-claudes-sandbox)
+    (TLDR InfoSec 2026-11-09).
 
 ## Architecture
 
