@@ -173,6 +173,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pc.AgentID, pc.AgentIDRejected = policy.NormalizeAgentID(r.Header.Get(headerAgentID))
+		if len(r.Header.Values(headerAgentID)) > 1 {
+			// Ambiguous identity: never pick one of the values.
+			pc.AgentID, pc.AgentIDRejected = "", true
+		}
 	}
 
 	// A halted proxy sends nothing upstream. The check repeats per tool call, because a

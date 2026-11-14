@@ -116,9 +116,9 @@ func TestIdentityHeaderStrippedEverywhere(t *testing.T) {
 	}
 }
 
-// With two identity headers the proxy uses the first and never the second. The test
-// pins that behaviour so a change is deliberate.
-func TestDuplicateIdentityHeadersUseFirst(t *testing.T) {
+// Two identity headers are ambiguous: the request is treated as an unknown identity,
+// whichever value comes first.
+func TestDuplicateIdentityHeadersAreUnknown(t *testing.T) {
 	pol, err := rules.ParsePolicy([]byte(profileYAML), rules.Options{Home: "/home/test", Workdir: "/work"})
 	if err != nil {
 		t.Fatal(err)
@@ -138,10 +138,9 @@ func TestDuplicateIdentityHeadersUseFirst(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		return string(b)
 	}
-	if b := send("coder-1", "stranger"); !strings.Contains(b, `"tool_use"`) {
-		t.Fatalf("first value should decide: %s", b)
-	}
-	if b := send("stranger", "coder-1"); !strings.Contains(b, "rule: profile-unknown") {
-		t.Fatalf("a later value must not rescue an unknown first value: %s", b)
+	for _, c := range [][2]string{{"coder-1", "stranger"}, {"stranger", "coder-1"}, {"coder-1", "coder-1"}} {
+		if b := send(c[0], c[1]); !strings.Contains(b, "rule: profile-unknown") {
+			t.Fatalf("duplicate %q must be unknown: %s", c, b)
+		}
 	}
 }
