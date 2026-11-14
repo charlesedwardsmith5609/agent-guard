@@ -142,3 +142,11 @@ Each failing test is written from the finding's repro input before the fix. Done
 | 23 | A halt transition takes effect only after its audit record is written (finding 5). | 8 |
 | 24 | Low items: findings 6 to 10. | 9 |
 | – | Finding 4 (identity binding) is a **DECISION** held for the human; no work until answered. | – |
+
+## Review fixes 2026-11-14
+
+Remaining PR #2 work after steps 7 to 9, per `.review/DECISIONS.md` D7.
+
+| # | Requirement | Step |
+|---|-------------|------|
+| 25 | Finding 4: document `X-Agent-Guard-Identity` profiles as labels, not authentication (self-asserted; any client that can reach the listener can claim any profile). Docs only: no listener binding and no per-agent secret; those stay Suggestions. | 10 |

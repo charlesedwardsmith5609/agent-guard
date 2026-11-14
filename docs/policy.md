@@ -75,6 +75,13 @@ The identity is the request header `X-Agent-Guard-Identity`. That header is agen
 it is not an Anthropic API field, and the proxy removes it before forwarding the request.
 Identities and profile names are 1 to 128 characters from `A-Za-z0-9_.:@/-`.
 
+**The identity is a label, not authentication.** The client sets the header itself, and the
+proxy has no way to check it. A profile constrains an honest agent. It does not stop any client
+that can reach the listener from sending another agent's identity and getting that agent's
+(possibly more permissive) profile. For isolation, run one proxy per agent and keep each
+listener reachable only by that agent; see
+[running many agents](running-many-agents.md#one-proxy-per-agent).
+
 When `profiles` is set:
 
 - a known identity uses that profile, and the audit record's `profile` is the profile name

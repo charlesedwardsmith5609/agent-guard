@@ -18,6 +18,10 @@ Run a separate process for each agent.
 Use this when a halt or a bad audit disk for one agent must not stop the others, and when you
 want to delete or rotate one log without touching the rest.
 
+This is also the way to isolate agents from each other. Keep each listener reachable only by
+its own agent. The identity header is a label that the client sets, not authentication, so it
+cannot separate agents that share a listener.
+
 ## One proxy, profiles for each agent
 
 Run one process. Put a `profiles` map and an `agents` map in the config. See
@@ -26,7 +30,10 @@ Run one process. Put a `profiles` map and an `agents` map in the config. See
 Each client sends `X-Agent-Guard-Identity` with the identity you listed. The proxy strips that
 header before it forwards the request. A missing identity is denied (`profile-missing`). An
 identity that is not in the map is denied (`profile-unknown`). There is no fallback profile, so
-a client that forgets the header does not run as another agent.
+a client that forgets the header does not run as another agent. A client that sends the wrong
+header on purpose does: the identity is a label, not authentication (see
+[profiles](policy.md#profiles-and-agents)). Do not rely on profiles to keep one agent out of
+another's profile.
 
 Use this when the agents can share a fate. One process means one halt file. Setting it to
 `halted` refuses every tool call from every agent on that proxy, on the next decision each of

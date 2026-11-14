@@ -41,7 +41,9 @@ sub-agents, MCP), extended thinking and long sessions have not been tried, so ex
 - Policy in YAML: allowed tools, allowed hosts, path scopes, and how to treat sensitive
   locations (see [docs/policy.md](docs/policy.md)). Optional named profiles, selected by the
   `X-Agent-Guard-Identity` header. Without that map every caller shares one policy. With it, a
-  missing or unknown identity is denied.
+  missing or unknown identity is denied. The identity is a label, not authentication: see
+  [profiles](docs/policy.md#profiles-and-agents) and
+  [running many agents](docs/running-many-agents.md).
 
 ## Quick start
 
