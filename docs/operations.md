@@ -35,6 +35,7 @@ that**, and there is no authentication.
 | `-max-response` | `10m` | Absolute time limit for one upstream exchange, however much data keeps arriving |
 | `-decide-timeout` | `5s` | Time allowed for one decision, including waiting for its audit write |
 | `-upstream-timeout` | `30s` | Time to wait for the upstream's response headers |
+| `-halt-file` | *unset* | Path of the halt control file. Omit it and the proxy does not halt. See [Halt](#halt) |
 
 Flag values that are not positive, an unknown `-otel` value or a missing required flag print an
 error and exit with status 2.
@@ -100,6 +101,25 @@ event, a stream that ends before `message_stop`, or a stream that goes silent), 
 dropped and the stream ends with an SSE `error` event of type `api_error` and the message
 `agent-guard: response rejected (fail closed)`.
 
+## Halt
+
+`-halt-file` points at a small text file. The proxy reads it when a request arrives (before anything is sent upstream) and again at the start of every tool-call decision. There is no background poll. The file is opened once, without following a symlink at the final path component (a symlinked parent directory is still followed), and read through a 64-byte limit; the file I/O happens outside the lock. One `Switch` owns the state under one mutex; the rest of the proxy does not keep a halt flag.
+
+| File contents (trimmed, case-insensitive) | Effect |
+|-------------------------------------------|--------|
+| `running`, `run`, or `0` | Tool calls are judged as usual |
+| `halted`, `halt`, or `1` | A request that arrives is refused with HTTP 503 and is not forwarded. A tool call already in flight when the halt lands is replaced with a block notice (`rule: halt`) |
+| anything else, including an empty file | Treated as halted (corrupt) |
+| missing file, symlink, directory, or a file larger than 64 bytes | Treated as halted (unreadable or corrupt) |
+
+A change is noticed by the next decision that starts after the write. A decision that has already entered the rules engine is not interrupted. The worst-case time from a completed write of the control file to the first blocked call is therefore the time until the next tool-call decision starts, plus one file read. That wait is not a poll interval.
+
+Each transition (`halt` or `resume`) is one audit line (`"event":"halt"` or `"event":"resume"`, `"decision":"HALT"` or `"RESUME"`). Each tool call refused mid-request is its own line (`"event":"refusal"`, `"decision":"BLOCK"`, `"rule":"halt"`). The first time a process reads a halted or unreadable file, that read is recorded as `halt`. Starting already running does not write a line.
+
+If the transition cannot be written to the audit log, the call or request is refused (`fail-closed:audit`) and the transition does not take effect. A failed `resume` record keeps the proxy halted; the next request tries the record again.
+
+Write the control file atomically: write a temporary file in the same directory, then `mv` it over the control file. `echo running > file` truncates first, so a read in between sees an empty file and records a false halt (and a false resume).
+
 ## Audit log
 
 One JSON object per line, written before the call is released. This is a real record produced by
@@ -120,6 +140,9 @@ the program:
 | `args_preview` | Redacted, compact JSON of the input, at most 256 bytes. Omitted with `-audit-preview=false`. `[unparseable]` or `[too large to preview]` (inputs over 64 KiB) when it cannot be shown |
 | `latency_ms` | How long the decision took, not including the audit write |
 | `stream` | Whether the response was streamed |
+| `profile` | The policy profile that applied. `default` when the file has no `profiles` map. Empty when the call was refused before a profile applied |
+| `agent` | The agent identity from `X-Agent-Guard-Identity`, reduced the same way as tool names. Omitted when the request had none |
+| `event` | `halt`, `resume`, or `refusal` for the halt switch. Omitted on an ordinary decision |
 
 It never contains request headers, API keys or complete request bodies.
 

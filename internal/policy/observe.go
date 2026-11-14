@@ -12,6 +12,12 @@ type Event struct {
 	Decision   Decision
 	Start, End time.Time
 	Stream     bool
+	// Agent is the raw agent identity from the request, if any. The audit log
+	// redacts it before writing.
+	Agent string
+	// Kind is "" for an ordinary decision, or "refusal" when the halt switch
+	// refused the call before the policy ran.
+	Kind string
 }
 
 // Observer receives every decision. Implementations must not block: they are called on the

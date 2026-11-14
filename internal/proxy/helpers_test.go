@@ -48,6 +48,20 @@ type recObs struct {
 	got    chan struct{} // one token per observed event (non-blocking send)
 }
 
+func (r *recObs) RecordControl(ctx context.Context, kind, reason string) error {
+	verdict := policy.Block
+	rule := "halt"
+	if kind == "resume" {
+		verdict = policy.Allow
+		rule = "resume"
+	}
+	return r.Observe(ctx, policy.Event{
+		Call:     policy.ToolCall{Name: "halt-control", ID: kind, Input: []byte(`{}`)},
+		Decision: policy.Decision{Verdict: verdict, Rule: rule, Reason: reason},
+		Kind:     kind,
+	})
+}
+
 func (r *recObs) Observe(ctx context.Context, e policy.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

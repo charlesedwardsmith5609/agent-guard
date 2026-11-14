@@ -15,6 +15,10 @@ arrived in step 3.)
 | `step-4.md` | The audit log and OpenTelemetry |
 | `step-5.md` | Canary / sensitive egress BLOCK |
 | `step-6.md` | BishopFox Claude sandbox lessons in the threat model (docs only) |
+| `step-7.md` | PR #2 HIGH findings: URL host extraction |
+| `step-8.md` | PR #2 MEDIUM findings: halt file read and audit-before-commit |
+| `step-9.md` | PR #2 LOW findings |
+| `pr2-review-state.md` | State of the PR #2 review work: done, open decision, suggestions |
 | `decisions-step-5-6.md` | Cross-model review record and locked answers for steps 5–6 |
 
 The requirements and the decisions behind them are in [`../REQUIREMENTS.md`](../REQUIREMENTS.md).

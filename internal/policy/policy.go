@@ -4,7 +4,26 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"regexp"
+	"strings"
 )
+
+// agentIDPattern is the identity alphabet shared by config keys and the
+// X-Agent-Guard-Identity header. It is not an Anthropic API field.
+var agentIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.:@/-]{1,128}$`)
+
+// NormalizeAgentID trims v. An empty result is a missing identity (rejected
+// is false). A value that is too long or outside the alphabet is rejected.
+func NormalizeAgentID(v string) (id string, rejected bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
+	}
+	if !agentIDPattern.MatchString(v) {
+		return "", true
+	}
+	return v, false
+}
 
 // Verdict is the outcome of evaluating one tool call.
 type Verdict string
@@ -29,6 +48,12 @@ type ToolCall struct {
 type Context struct {
 	// UserText is user-role text from the whole conversation. Tool results are excluded.
 	UserText []string
+	// AgentID is the identity from the request, after trimming. Empty when the
+	// caller did not send one.
+	AgentID string
+	// AgentIDRejected is set when the identity was present but not usable
+	// (for example longer than the limit). It must not be treated as a known agent.
+	AgentIDRejected bool
 }
 
 // Decision is a verdict plus the rule that produced it.
@@ -36,6 +61,9 @@ type Decision struct {
 	Verdict Verdict
 	Rule    string
 	Reason  string
+	// Profile is the named policy profile that produced the verdict.
+	// It is empty when no profile applied.
+	Profile string
 }
 
 // Decider evaluates tool calls. Implementations must be safe for concurrent use, own any state

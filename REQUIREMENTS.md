@@ -127,3 +127,26 @@ best suggestion per question was taken. Full record: [`plans/decisions-step-5-6.
 | # | Requirement | Status |
 |---|-------------|--------|
 | 25 | Add **"Lessons from BishopFox's Claude sandbox write-up"** as **new numbered item 11** under README “What it does NOT protect against”: process-level access can read process memory and make network interfaces; **agent-guard is not a sandbox**. Cite https://bishopfox.com/blog/journey-into-claudes-sandbox (TLDR InfoSec 2026-11-09). Docs only. | Implemented |
+
+## Proposed (2026-11-14 PR #2 review findings) — implemented in steps 7 to 9 (finding 4 still a DECISION)
+
+Source: `.review/findings.md` and `.review/shared-patterns.md`. Go stdlib only; no new modules.
+Each failing test is written from the finding's repro input before the fix. Done means
+`bash scripts/check.sh` passes, reported per stage.
+
+| # | Requirement | Step |
+|---|-------------|------|
+| 20 | URL host extraction must not let an allowed host hide the real host (finding 1). Unparseable host BLOCKs. | 7 |
+| 21 | Special schemes (http, https, ws, wss, ftp) yield a host with any run of `/` or `\` after `scheme:`; empty host BLOCKs (finding 2). | 7 |
+| 22 | Halt file read is bounded, non-blocking, no-follow, and done outside the mutex (finding 3). | 8 |
+| 23 | A halt transition takes effect only after its audit record is written (finding 5). | 8 |
+| 24 | Low items: findings 6 to 10. | 9 |
+| – | Finding 4 (identity binding) is a **DECISION** held for the human; no work until answered. | – |
+
+## Review fixes 2026-11-14
+
+Remaining PR #2 work after steps 7 to 9, per `.review/DECISIONS.md` D7.
+
+| # | Requirement | Step |
+|---|-------------|------|
+| 25 | Finding 4: document `X-Agent-Guard-Identity` profiles as labels, not authentication (self-asserted; any client that can reach the listener can claim any profile). Docs only: no listener binding and no per-agent secret; those stay Suggestions. | 10 |

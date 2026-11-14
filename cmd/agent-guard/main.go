@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"agent-guard/internal/audit"
+	"agent-guard/internal/halt"
 	"agent-guard/internal/proxy"
 	"agent-guard/internal/rules"
 	"agent-guard/internal/telemetry"
@@ -34,6 +35,7 @@ type options struct {
 	maxResponse     time.Duration
 	maxInflight     int
 	maxConns        int
+	haltFile        string
 }
 
 func parseOptions(args []string, out io.Writer) (options, error) {
@@ -51,6 +53,7 @@ func parseOptions(args []string, out io.Writer) (options, error) {
 	fs.DurationVar(&o.maxResponse, "max-response", 10*time.Minute, "absolute limit on one upstream exchange")
 	fs.IntVar(&o.maxInflight, "max-inflight", 64, "concurrent requests before answering 503")
 	fs.IntVar(&o.maxConns, "max-conns", 256, "concurrent accepted connections")
+	fs.StringVar(&o.haltFile, "halt-file", "", "halt control file (running/halted); unreadable or corrupt refuses every tool call")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -81,11 +84,11 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("bad -upstream: %w", err)
 	}
-	engine, err := rules.Load(o.config)
+	pol, err := rules.LoadPolicy(o.config)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("loading %s: %w", o.config, err)
 	}
-	auditLog, err := audit.Open(o.auditLog, audit.Options{NoPreview: !o.auditPreview, Canaries: engine.Canaries()})
+	auditLog, err := audit.Open(o.auditLog, audit.Options{NoPreview: !o.auditPreview, Canaries: pol.Canaries()})
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -101,11 +104,28 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 		shutdown(context.Background())
 		return nil, nil, nil, err
 	}
+	var haltSwitch *halt.Switch
+	if o.haltFile != "" {
+		haltSwitch = halt.New(o.haltFile)
+		r := haltSwitch.Check()
+		if r.Transition != "" {
+			cctx, cancel := context.WithTimeout(context.Background(), o.decideTimeout)
+			err := auditLog.RecordControl(cctx, r.Transition, r.Reason)
+			cancel()
+			if err != nil {
+				haltSwitch.Abort(r)
+				return fail(err)
+			}
+			haltSwitch.Commit(r)
+			log.Info("halt control", "event", r.Transition, "halted", r.Halted)
+		}
+	}
 	cfg := proxy.Config{
 		Upstream:            u,
-		Decider:             engine,
+		Decider:             pol,
 		Audit:               auditLog,
 		Logger:              log,
+		Halt:                haltSwitch,
 		DecideTimeout:       o.decideTimeout,
 		UpstreamTimeout:     o.upstreamTimeout,
 		MaxResponseDuration: o.maxResponse,

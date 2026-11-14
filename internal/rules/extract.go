@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,7 +34,6 @@ var pathKeys = map[string]bool{
 }
 
 var (
-	urlRe  = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://([^\s/?#'"<>)\]\\]+|\[[0-9A-Fa-f:.]+\])`)
 	scpRe  = regexp.MustCompile(`[\w.\-]+@([A-Za-z0-9][A-Za-z0-9.\-]*[A-Za-z0-9]):`)
 	ipv4Re = regexp.MustCompile(`(?:^|[^0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:$|[^0-9.])`)
 )
@@ -162,16 +162,33 @@ func (w *walker) fail(err error) {
 }
 
 func (w *walker) addHost(h string) {
-	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	h = canonicalHost(h)
 	if h == "" {
 		return
-	}
-	if ip, ok := looseIPv4(h); ok {
-		h = ip
 	}
 	if !w.hosts.add(h) {
 		w.fail(errTooMany)
 	}
+}
+
+// canonicalHost folds a host to the form the allowlist is stored in: lower
+// case, no trailing dots, and one spelling for addresses that are the same
+// number (decimal, hex, octal, and IPv4-mapped IPv6).
+func canonicalHost(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	for strings.HasSuffix(h, ".") {
+		h = strings.TrimSuffix(h, ".")
+	}
+	if len(h) >= 2 && h[0] == '[' && h[len(h)-1] == ']' {
+		h = h[1 : len(h)-1]
+	}
+	if ip, ok := looseIPv4(h); ok {
+		return ip
+	}
+	if addr, err := netip.ParseAddr(h); err == nil {
+		return addr.Unmap().String()
+	}
+	return h
 }
 
 func (w *walker) addCandidate(p string) {
@@ -187,9 +204,7 @@ func (w *walker) scan(key, s string) {
 		}
 		w.addCandidate(s)
 	}
-	for _, m := range urlRe.FindAllStringSubmatch(s, -1) {
-		w.addHost(authorityHost(m[1]))
-	}
+	w.scanURLs(s)
 	for _, m := range scpRe.FindAllStringSubmatch(s, -1) {
 		w.addHost(m[1])
 	}
@@ -327,20 +342,143 @@ func allDigits(s string) bool {
 	return s != ""
 }
 
-// authorityHost extracts the host from a URL authority (userinfo, port and brackets removed).
-func authorityHost(a string) string {
+var errUnparseableHost = errors.New("unparseable host in URL")
+
+// Schemes the WHATWG URL parser treats as special: "scheme:" needs no "//", and
+// any run of / or \ after it introduces the authority.
+var specialSchemes = map[string]bool{"http": true, "https": true, "ws": true, "wss": true, "ftp": true}
+
+func isSchemeChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '.' || c == '-'
+}
+
+// scanURLs finds every "scheme:" in s and adds the host of its authority. It makes
+// one pass over s; tab, CR and LF are skipped in place (the WHATWG parser removes
+// them), and the authority ends at the first / ? # or space (and \ for special
+// schemes). A host that cannot be read fails the whole input, so it is BLOCKed.
+func (w *walker) scanURLs(s string) {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != ':' {
+			continue
+		}
+		if n++; n%ctxEvery == 0 {
+			if err := w.ctx.Err(); err != nil {
+				w.fail(err)
+				return
+			}
+		}
+		j := i
+		for j > 0 && isSchemeChar(s[j-1]) {
+			j--
+		}
+		for j < i && !(s[j] >= 'a' && s[j] <= 'z' || s[j] >= 'A' && s[j] <= 'Z') {
+			j++
+		}
+		if j == i {
+			continue
+		}
+		special := specialSchemes[strings.ToLower(s[j:i])]
+		k := i + 1
+		slashes := 0
+		if special {
+			for k < len(s) && (s[k] == '/' || s[k] == '\\') {
+				k++
+				slashes++
+			}
+		} else if strings.HasPrefix(s[k:], "//") {
+			k += 2
+		} else {
+			continue
+		}
+		auth, loose := authorityAt(s, k, special)
+		if auth == "" && !special {
+			continue
+		}
+		if auth == "" && slashes == 0 {
+			continue // "http:" followed by a space or the end is prose, not a URL
+		}
+		w.addAuthority(auth, special)
+		if loose != "" {
+			w.addAuthority(loose, special) // a client that does not treat \ as / reads this host
+		}
+		if w.err != nil {
+			return
+		}
+	}
+}
+
+// authorityAt reads the authority starting at s[k]. For special schemes it also returns
+// the longer authority that results when \ does not end it, if that one holds an '@'.
+func authorityAt(s string, k int, special bool) (strict, loose string) {
+	var a, b []byte
+	strictDone := false
+	for ; k < len(s); k++ {
+		c := s[k]
+		if c == '\t' || c == '\r' || c == '\n' {
+			continue
+		}
+		if c == ' ' || c == '/' || c == '?' || c == '#' || c == '\f' || c == '\v' {
+			break
+		}
+		if c == '\\' && special {
+			strictDone = true
+		}
+		if !strictDone {
+			a = append(a, c)
+		}
+		b = append(b, c)
+	}
+	if !special || !strictDone {
+		return string(a), ""
+	}
+	if bytes.IndexByte(b, '@') < 0 {
+		return string(a), ""
+	}
+	return string(a), string(b)
+}
+
+// addAuthority adds the host of one authority, or fails the input if it has none.
+func (w *walker) addAuthority(a string, special bool) {
+	h, ok := authorityHost(a)
+	if !ok {
+		w.fail(errUnparseableHost)
+		return
+	}
+	if h == "" {
+		if special {
+			w.fail(errUnparseableHost)
+		}
+		return
+	}
+	w.addHost(h)
+}
+
+// authorityHost extracts the host from a URL authority: everything after the last '@',
+// port and brackets removed. Quote, paren and angle characters end the host (a URL
+// pasted into shell text or prose). The host must be a name or address literal.
+func authorityHost(a string) (string, bool) {
 	if i := strings.LastIndexByte(a, '@'); i >= 0 {
 		a = a[i+1:]
 	}
-	if strings.HasPrefix(a, "[") {
-		if j := strings.IndexByte(a, ']'); j > 0 {
-			return a[1:j]
-		}
-	}
-	if i := strings.LastIndexByte(a, ':'); i >= 0 {
+	if i := strings.IndexAny(a, `'"<>)`); i >= 0 {
 		a = a[:i]
 	}
-	return a
+	if strings.HasPrefix(a, "[") {
+		if j := strings.IndexByte(a, ']'); j > 0 {
+			a = a[:j+1]
+		}
+	} else if i := strings.LastIndexByte(a, ':'); i >= 0 {
+		a = a[:i]
+	}
+	if a == "" {
+		return "", true
+	}
+	h := canonicalHost(a)
+	if !validHost(h) {
+		return "", false
+	}
+	return h, true
 }
 
 // tokenize splits shell-ish text into tokens. An empty string marks a command separator.

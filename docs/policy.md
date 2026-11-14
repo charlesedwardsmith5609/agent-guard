@@ -43,6 +43,54 @@ prefix must be at least 3 characters, so `*` alone is rejected. A `*` anywhere e
 You do not need to know your agent's tool names in advance: run it, then read them from the audit
 log (see [operations](operations.md#audit-log)).
 
+### `profiles` and `agents`
+
+By default the file is one policy and every caller shares it. The audit field `profile` is
+`default`. Nothing in the request selects a different policy.
+
+To give agents different policies, replace the top-level `tools`, `hosts`, and `paths` keys
+with `profiles` and `agents`:
+
+```yaml
+profiles:
+  coder:
+    tools: [Read, Bash]
+    hosts: [github.com]
+    paths:
+      allow: ["/work"]
+  reviewer:
+    tools: [Read]
+    hosts: []
+    paths:
+      allow: ["/work"]
+agents:
+  coder-1: coder
+  reviewer-1: reviewer
+```
+
+Each profile has the same required keys as a single policy. `agents` maps an identity to a
+profile name. A name that is not a profile is an error at startup.
+
+The identity is the request header `X-Agent-Guard-Identity`. That header is agent-guard's own;
+it is not an Anthropic API field, and the proxy removes it before forwarding the request.
+Identities and profile names are 1 to 128 characters from `A-Za-z0-9_.:@/-`.
+
+**The identity is a label, not authentication.** The client sets the header itself, and the
+proxy has no way to check it. A profile constrains an honest agent. It does not stop any client
+that can reach the listener from sending another agent's identity and getting that agent's
+(possibly more permissive) profile. For isolation, run one proxy per agent and keep each
+listener reachable only by that agent; see
+[running many agents](running-many-agents.md#one-proxy-per-agent).
+
+When `profiles` is set:
+
+- a known identity uses that profile, and the audit record's `profile` is the profile name
+- a missing identity is `BLOCK` with rule `profile-missing`
+- an identity that is not in `agents`, or that is not in the alphabet above, is `BLOCK` with
+  rule `profile-unknown`
+
+There is no implicit profile. An empty `agents` map denies every caller.
+
 ### `hosts`
 
 Hosts that tool calls may contact. Case-insensitive. Entries are either:
@@ -145,9 +193,18 @@ to the host and sensitive checks but not to the path scope.
 
 From each string, agent-guard collects:
 
-1. **URLs**: the host of anything shaped like `scheme://authority/...`. The authority ends at the
+1. **URLs**: the host of anything shaped like `scheme://authority/...`. For `http`, `https`, `ws`,
+   `wss` and `ftp` the `//` is optional and any run of `/` or `\` may follow the colon
+   (`http:/evil.com/` is `evil.com`); an empty host there is BLOCK. Tab, CR and LF are ignored.
+   The authority ends at the first `/`, `?`, `#` or space (and `\` for those schemes; a client that
+   does not treat `\` as `/` is also covered). A quote, `)`, `<` or `>` does not end it before an
+   `@`, so `http://github.com'@evil.com/` is `evil.com`. A host that is not a valid name or address
+   (for example one containing `%`) is BLOCK as unparseable. The authority ends at the
    first `/`, `?` or `#`, so `http://evil.com?@github.com` is `evil.com`, and
-   `http://github.com@evil.com/` is `evil.com`.
+   `http://github.com@evil.com/` is `evil.com`. The host is the part after the last `@`, including
+   a bracketed IPv6 address (`http://github.com@[2001:db8::1]/` is `2001:db8::1`, not
+   `github.com`). A port is removed. Trailing dots and letter case are folded
+   (`GitHub.COM.` is `github.com`).
 2. **`user@host:` forms**, as in `git@github.com:org/repo.git`.
 3. **IPv4 literals**, such as `10.0.0.5`.
 4. **Words in shell-style text**. The text is split into tokens at spaces, quotes and a few
@@ -176,11 +233,15 @@ From each string, agent-guard collects:
 A host that is not in `hosts` is allowed if it appears in a **user** message anywhere in the
 conversation. The match is on whole words, case-insensitive: the text must contain `example.com`
 as a word (a trailing full stop is fine), not `notexample.com` or `example.com.attacker.net`.
-Tool results are never consulted, so a web page cannot authorise its own host. The mention must
-use the same spelling as the call: if the call uses `169.254.43518`, writing `169.254.169.254` in
-the prompt does not authorise it.
+Tool results are never consulted, so a web page cannot authorise its own host. The mention is
+compared to the stored host, not to every raw spelling in the call.
 
 A mention only satisfies the `hosts` rule. It never clears a `sensitive:` rule.
+
+Numeric and IPv6 spellings are stored in one canonical form before the allowlist and the mention
+check (so `2130706433`, `0x7f000001` and `0177.0.0.1` are `127.0.0.1`, and `[::ffff:127.0.0.1]`
+is `127.0.0.1` as well). The mention has to contain that stored form. Writing `2130706433` does
+not authorise a call whose stored host is `127.0.0.1`. Writing `127.0.0.1` does.
 
 ### What the host detection cannot do
 
@@ -196,8 +257,8 @@ It is a heuristic and will both miss things and over-block:
 - It can over-block: URLs inside request data (`curl --data https://x.com ...`) are counted as
   hosts, a remote file name after `ssh host cat release.zip` can be read as a host, and any
   dotted word ending in a listed TLD is a host.
-- Only text inside the tool's input is examined. Nothing is resolved: a name that points at a
-  forbidden address passes if the name is allowed.
+- Only text inside the tool's input is examined. The guard sees those arguments, not packets:
+  nothing is resolved, and a name that points at a forbidden address passes if the name is allowed.
 
 ## How sensitive paths are detected
 
@@ -223,6 +284,9 @@ Find the call in the audit log (`jq 'select(.decision != "ALLOW")' audit.jsonl`)
 | `host-not-allowed` | A host in the call is not in `hosts` and you did not mention it | Add the host, or name it in your message. Check `reason`: it might be a file name read as a host |
 | `path-out-of-scope` | A path argument is outside `paths.allow` | Add the directory, or fix `workdir` if a relative path resolved somewhere unexpected |
 | `sensitive:<class>` | The call touches a sensitive location | Expected. ASK needs your say-so; set the class to `block` to refuse outright |
+| `halt` | The halt file is halted, missing, or corrupt, and the halt arrived while the model was answering. (A request that arrives while halted gets HTTP 503 and has no rule.) The call was refused before the other rules ran | Write `running` to the halt file. See [operations](operations.md#halt) |
+| `profile-missing` | `profiles` is set and the request has no agent identity | Send `X-Agent-Guard-Identity`. See [profiles](#profiles-and-agents) |
+| `profile-unknown` | The identity is not in `agents`, or it is not a usable token | Map the identity to a profile that exists |
 | `fail-closed:error` | The decision itself failed (unparseable input, input too large, a limit) | The audit `reason` and the proxy's stderr log say what failed |
 | `fail-closed:timeout` | The decision took longer than `-decide-timeout` | Usually a stuck or very slow policy evaluation |
 | `fail-closed:overloaded` | Too many decisions were running at once | Retry |
