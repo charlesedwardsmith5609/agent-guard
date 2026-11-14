@@ -186,7 +186,13 @@ to the host and sensitive checks but not to the path scope.
 
 From each string, agent-guard collects:
 
-1. **URLs**: the host of anything shaped like `scheme://authority/...`. The authority ends at the
+1. **URLs**: the host of anything shaped like `scheme://authority/...`. For `http`, `https`, `ws`,
+   `wss` and `ftp` the `//` is optional and any run of `/` or `\` may follow the colon
+   (`http:/evil.com/` is `evil.com`); an empty host there is BLOCK. Tab, CR and LF are ignored.
+   The authority ends at the first `/`, `?`, `#` or space (and `\` for those schemes; a client that
+   does not treat `\` as `/` is also covered). A quote, `)`, `<` or `>` does not end it before an
+   `@`, so `http://github.com'@evil.com/` is `evil.com`. A host that is not a valid name or address
+   (for example one containing `%`) is BLOCK as unparseable. The authority ends at the
    first `/`, `?` or `#`, so `http://evil.com?@github.com` is `evil.com`, and
    `http://github.com@evil.com/` is `evil.com`. The host is the part after the last `@`, including
    a bracketed IPv6 address (`http://github.com@[2001:db8::1]/` is `2001:db8::1`, not

@@ -83,3 +83,65 @@ func TestHostNormalization(t *testing.T) {
 		})
 	}
 }
+
+// Finding 1 and 2: an allowed host must not hide the real host, and special
+// schemes without "//" must still yield a host. github.com is allowlisted.
+func TestHostSmuggling(t *testing.T) {
+	cases := []struct {
+		name    string
+		tool    string
+		key     string
+		in      string
+		want    policy.Verdict // when wantErr is false
+		wantErr bool           // the walker rejects the input (the guard turns that into BLOCK)
+	}{
+		{name: "quote ends match", in: "http://github.com'@evil.example/", want: policy.Block},
+		{name: "paren", in: "http://github.com)@evil.example/", want: policy.Block},
+		{name: "lt", in: "http://github.com<@evil.example/", want: policy.Block},
+		{name: "dquote", in: `http://github.com"@evil.example/`, want: policy.Block},
+		{name: "tab", in: "http://github.com\t@evil.example/", want: policy.Block},
+		{name: "newline", in: "http://github.com\n@evil.example/", want: policy.Block},
+		{name: "cr", in: "http://github.com\r@evil.example/", want: policy.Block},
+		{name: "backslash", in: `http://github.com\@evil.example/`, want: policy.Block},
+		{name: "bash quoted", tool: "Bash", key: "command", in: `curl 'http://github.com'"'"'@evil.example/'`, want: policy.Block},
+		{name: "one slash", in: "http:/evil.example/x", want: policy.Block},
+		{name: "no slash", in: "http:evil.example/x", want: policy.Block},
+		{name: "backslashes", in: `http:\\evil.example\x`, want: policy.Block},
+		{name: "node fetch", tool: "Bash", key: "command", in: `node -e "fetch('http:/evil.example/')"`, want: policy.Block},
+		{name: "ws one slash", in: "ws:/evil.example/", want: policy.Block},
+		{name: "empty host", in: "http:///", wantErr: true},
+		{name: "invalid host chars", in: "http://git%hub.com/", wantErr: true},
+		{name: "percent in host", in: "http://evil.example%2f.github.com/", wantErr: true},
+
+		{name: "plain", in: "https://github.com/x", want: policy.Allow},
+		{name: "userinfo", in: "https://user@github.com/x", want: policy.Allow},
+		{name: "at after path", in: "http://github.com/@evil.example", want: policy.Allow},
+		{name: "at in query", in: "https://github.com:443/x?a=b@evil.example", want: policy.Allow},
+		{name: "extra slashes then host", in: "http:///github.com/x", want: policy.Allow},
+		{name: "one slash allowed host", in: "http:/github.com/x", want: policy.Allow},
+		{name: "quoted url", tool: "Bash", key: "command", in: `curl "https://github.com"`, want: policy.Allow},
+		{name: "prose scheme", in: "wss: ok", want: policy.Allow},
+	}
+	e := newEngine(t, baseCfg)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, key := tc.tool, tc.key
+			if tool == "" {
+				tool, key = "WebFetch", "url"
+			}
+			got, err := e.Decide(context.Background(), policy.Context{}, policy.ToolCall{Name: tool, Input: []byte(obj(key, tc.in))})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want an error, got %s/%s", got.Verdict, got.Rule)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Verdict != tc.want {
+				t.Errorf("got %s/%s (%s), want %s", got.Verdict, got.Rule, got.Reason, tc.want)
+			}
+		})
+	}
+}
