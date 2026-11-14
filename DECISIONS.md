@@ -41,3 +41,16 @@ Choice: Option 2. The allowlist is stored in that same form. A mention matches t
 
 Why: An empty host is an allow. Matching `::ffff:127.0.0.1` to an allowlisted `127.0.0.1` is the same address, not a new destination. Leaving the bracket case unparsed would hide the real host behind an allowlisted name in the userinfo.
 
+## 2026-11-13 Ask stays a notice
+
+Context: Allow, Block, and Ask already exist. Ask replaces the tool call with a notice and does not run it. Nothing waits for a person.
+
+Options:
+
+1. Add a new "Needs approval" verdict and an approval service.
+2. Write down the current Ask behavior, the gaps, and a proposed unattended flow that denies on timeout. Do not build it.
+
+Choice: Option 2, in `docs/ask-verdict.md`. The proposal reuses Ask, denies when no approval arrives, and treats an unreachable approver as a deny. No timer or new verdict was added.
+
+Why: A second verdict would overlap Ask. Building an approver needs a channel the model cannot write to, which is a product decision, not something to invent in this pass. Deny on timeout is the fail-closed default for a run with nobody watching.
+

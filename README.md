@@ -99,7 +99,8 @@ replaced, a `stop_reason` of `tool_use` becomes `end_turn`, so the harness does 
 results that will never come.
 
 **ASK is a notice, not an approval flow.** The call is not executed and nothing waits for you.
-There is no out-of-band approval channel.
+There is no out-of-band approval channel. What that means for an unattended run, and a proposed
+deny-on-timeout flow that is not built, is in [docs/ask-verdict.md](docs/ask-verdict.md).
 
 **What happens next depends on the rest of the response** (observed with Claude Code):
 
@@ -131,6 +132,7 @@ write fails or does not finish within the decision timeout, the call is blocked
 | [docs/policy.md](docs/policy.md) | Every policy key, exactly how hosts, paths and sensitive locations are detected and matched, and how to answer "why was this blocked?" |
 | [docs/operations.md](docs/operations.md) | Flags, fixed limits, HTTP behaviour, streaming, the audit log format and recipes, OpenTelemetry, shutdown, troubleshooting |
 | [docs/development.md](docs/development.md) | Building, testing, repository layout, conventions |
+| [docs/ask-verdict.md](docs/ask-verdict.md) | What Ask does today, the gaps, and a proposed deny-on-timeout for unattended runs |
 | [SECURITY.md](SECURITY.md) | Scope and how to report a vulnerability |
 | [examples/policy.yaml](examples/policy.yaml) | A commented starting policy (tested to load) |
 | [REQUIREMENTS.md](REQUIREMENTS.md), [plans/](plans/) | Requirements, design decisions and the design history |
