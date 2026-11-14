@@ -18,7 +18,8 @@ import (
 	"agent-guard/internal/policy"
 )
 
-type fileConfig struct {
+// profileBody is one policy: the whole file, or one entry under profiles.
+type profileBody struct {
 	Tools *[]string `yaml:"tools"`
 	Hosts *[]string `yaml:"hosts"`
 	Paths *struct {
@@ -28,6 +29,12 @@ type fileConfig struct {
 	Sensitive  map[string]string `yaml:"sensitive"`
 	Canaries   *[]string         `yaml:"canaries"`
 	ForumTools *[]string         `yaml:"forum_tools"`
+}
+
+type fileConfig struct {
+	profileBody `yaml:",inline"`
+	Profiles    map[string]profileBody `yaml:"profiles"`
+	Agents      map[string]string      `yaml:"agents"`
 }
 
 // Sensitive classes, usable as keys under `sensitive:` in the config.
@@ -71,8 +78,29 @@ const (
 
 var hostLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
-// Load reads and parses a config file.
+// Load reads and parses a single-policy config file.
 func Load(file string) (*Engine, error) {
+	p, err := LoadPolicy(file)
+	if err != nil {
+		return nil, err
+	}
+	if p.single == nil {
+		return nil, errors.New("config: this file uses profiles; load it with LoadPolicy")
+	}
+	return p.single, nil
+}
+
+// LoadPolicy reads a config file. A file with no profiles is one policy. A file
+// with profiles selects one of them by agent identity.
+func LoadPolicy(file string) (*Policy, error) {
+	b, err := readConfig(file)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePolicy(b, Options{})
+}
+
+func readConfig(file string) ([]byte, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
@@ -85,11 +113,27 @@ func Load(file string) (*Engine, error) {
 	if len(b) > maxConfigBytes {
 		return nil, fmt.Errorf("config is larger than %d bytes", maxConfigBytes)
 	}
-	return Parse(b, Options{})
+	return b, nil
 }
 
-// Parse validates a YAML config. Any problem is an error; nothing is defaulted silently.
+// Parse validates a single-policy YAML config. A profiles file is rejected;
+// use ParsePolicy for that.
 func Parse(data []byte, opt Options) (*Engine, error) {
+	p, err := ParsePolicy(data, opt)
+	if err != nil {
+		return nil, err
+	}
+	if p.single == nil {
+		return nil, errors.New("config: this file uses profiles; load it with ParsePolicy")
+	}
+	return p.single, nil
+}
+
+// ParsePolicy validates a YAML config. Without profiles it returns a Policy
+// that applies that one policy and records the profile name "default". With
+// profiles, identity selects a named profile and an unknown or missing
+// identity is denied.
+func ParsePolicy(data []byte, opt Options) (*Policy, error) {
 	var fc fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -103,15 +147,55 @@ func Parse(data []byte, opt Options) (*Engine, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("config: exactly one YAML document is allowed")
 	}
-	if fc.Tools == nil || fc.Hosts == nil || fc.Paths == nil || fc.Paths.Allow == nil {
-		return nil, errors.New("config: tools, hosts and paths.allow are required (use [] to allow nothing)")
-	}
 	if opt.Home == "" {
 		h, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("config: cannot determine home directory: %w", err)
 		}
 		opt.Home = h
+	}
+	if fc.Profiles == nil && fc.Agents == nil {
+		e, err := buildEngine(fc.profileBody, opt)
+		if err != nil {
+			return nil, err
+		}
+		return &Policy{single: e}, nil
+	}
+	if fc.Profiles == nil || fc.Agents == nil {
+		return nil, errors.New("config: profiles and agents must be set together")
+	}
+	if fc.Tools != nil || fc.Hosts != nil || fc.Paths != nil || len(fc.Sensitive) > 0 || fc.Canaries != nil || fc.ForumTools != nil {
+		return nil, errors.New("config: do not set top-level tools, hosts, paths, sensitive, canaries, or forum_tools when profiles is set")
+	}
+	if len(fc.Profiles) == 0 {
+		return nil, errors.New("config: profiles is empty")
+	}
+	p := &Policy{byName: map[string]*Engine{}, agents: map[string]string{}}
+	for name, body := range fc.Profiles {
+		if _, rejected := policy.NormalizeAgentID(name); rejected || name == "" {
+			return nil, fmt.Errorf("config: invalid profile name %q", name)
+		}
+		e, err := buildEngine(body, opt)
+		if err != nil {
+			return nil, fmt.Errorf("config: profile %s: %w", name, err)
+		}
+		p.byName[name] = e
+	}
+	for id, name := range fc.Agents {
+		if _, rejected := policy.NormalizeAgentID(id); rejected || id == "" {
+			return nil, fmt.Errorf("config: invalid agent identity %q", id)
+		}
+		if p.byName[name] == nil {
+			return nil, fmt.Errorf("config: agent %q selects unknown profile %q", id, name)
+		}
+		p.agents[id] = name
+	}
+	return p, nil
+}
+
+func buildEngine(fc profileBody, opt Options) (*Engine, error) {
+	if fc.Tools == nil || fc.Hosts == nil || fc.Paths == nil || fc.Paths.Allow == nil {
+		return nil, errors.New("config: tools, hosts and paths.allow are required (use [] to allow nothing)")
 	}
 	e := &Engine{
 		toolsExact: map[string]bool{}, hostsExact: map[string]bool{}, forumExact: map[string]bool{},

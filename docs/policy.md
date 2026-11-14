@@ -43,6 +43,47 @@ prefix must be at least 3 characters, so `*` alone is rejected. A `*` anywhere e
 You do not need to know your agent's tool names in advance: run it, then read them from the audit
 log (see [operations](operations.md#audit-log)).
 
+### `profiles` and `agents`
+
+By default the file is one policy and every caller shares it. The audit field `profile` is
+`default`. Nothing in the request selects a different policy.
+
+To give agents different policies, replace the top-level `tools`, `hosts`, and `paths` keys
+with `profiles` and `agents`:
+
+```yaml
+profiles:
+  coder:
+    tools: [Read, Bash]
+    hosts: [github.com]
+    paths:
+      allow: ["/work"]
+  reviewer:
+    tools: [Read]
+    hosts: []
+    paths:
+      allow: ["/work"]
+agents:
+  coder-1: coder
+  reviewer-1: reviewer
+```
+
+Each profile has the same required keys as a single policy. `agents` maps an identity to a
+profile name. A name that is not a profile is an error at startup.
+
+The identity is the request header `X-Agent-Guard-Identity`. That header is agent-guard's own;
+it is not an Anthropic API field, and the proxy removes it before forwarding the request.
+Identities and profile names are 1 to 128 characters from `A-Za-z0-9_.:@/-`.
+
+When `profiles` is set:
+
+- a known identity uses that profile, and the audit record's `profile` is the profile name
+- a missing identity is `BLOCK` with rule `profile-missing`
+- an identity that is not in `agents`, or that is not in the alphabet above, is `BLOCK` with
+  rule `profile-unknown`
+
+There is no implicit profile. An empty `agents` map denies every caller.
+
 ### `hosts`
 
 Hosts that tool calls may contact. Case-insensitive. Entries are either:
@@ -224,6 +265,8 @@ Find the call in the audit log (`jq 'select(.decision != "ALLOW")' audit.jsonl`)
 | `path-out-of-scope` | A path argument is outside `paths.allow` | Add the directory, or fix `workdir` if a relative path resolved somewhere unexpected |
 | `sensitive:<class>` | The call touches a sensitive location | Expected. ASK needs your say-so; set the class to `block` to refuse outright |
 | `halt` | The halt file is halted, missing, or corrupt. The call was refused before the other rules ran | Write `running` to the halt file. See [operations](operations.md#halt) |
+| `profile-missing` | `profiles` is set and the request has no agent identity | Send `X-Agent-Guard-Identity`. See [profiles](#profiles-and-agents) |
+| `profile-unknown` | The identity is not in `agents`, or it is not a usable token | Map the identity to a profile that exists |
 | `fail-closed:error` | The decision itself failed (unparseable input, input too large, a limit) | The audit `reason` and the proxy's stderr log say what failed |
 | `fail-closed:timeout` | The decision took longer than `-decide-timeout` | Usually a stuck or very slow policy evaluation |
 | `fail-closed:overloaded` | Too many decisions were running at once | Retry |

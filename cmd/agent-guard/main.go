@@ -84,11 +84,11 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("bad -upstream: %w", err)
 	}
-	engine, err := rules.Load(o.config)
+	pol, err := rules.LoadPolicy(o.config)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("loading %s: %w", o.config, err)
 	}
-	auditLog, err := audit.Open(o.auditLog, audit.Options{NoPreview: !o.auditPreview, Canaries: engine.Canaries()})
+	auditLog, err := audit.Open(o.auditLog, audit.Options{NoPreview: !o.auditPreview, Canaries: pol.Canaries()})
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -120,7 +120,7 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 	}
 	cfg := proxy.Config{
 		Upstream:            u,
-		Decider:             engine,
+		Decider:             pol,
 		Audit:               auditLog,
 		Logger:              log,
 		Halt:                haltSwitch,

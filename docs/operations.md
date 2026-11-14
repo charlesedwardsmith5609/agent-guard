@@ -138,6 +138,9 @@ the program:
 | `args_preview` | Redacted, compact JSON of the input, at most 256 bytes. Omitted with `-audit-preview=false`. `[unparseable]` or `[too large to preview]` (inputs over 64 KiB) when it cannot be shown |
 | `latency_ms` | How long the decision took, not including the audit write |
 | `stream` | Whether the response was streamed |
+| `profile` | The policy profile that applied. `default` when the file has no `profiles` map. Empty when the call was refused before a profile applied |
+| `agent` | The agent identity from `X-Agent-Guard-Identity`, reduced the same way as tool names. Omitted when the request had none |
+| `event` | `halt`, `resume`, or `refusal` for the halt switch. Omitted on an ordinary decision |
 
 It never contains request headers, API keys or complete request bodies.
 

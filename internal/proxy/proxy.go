@@ -127,6 +127,9 @@ func New(cfg Config) (*Proxy, error) {
 const (
 	pathMessages = "/v1/messages"
 	pathCount    = "/v1/messages/count_tokens"
+	// headerAgentID is agent-guard's own request header. It is not an
+	// Anthropic field and is removed before the request is forwarded.
+	headerAgentID = "X-Agent-Guard-Identity"
 )
 
 // ServeHTTP implements http.Handler.
@@ -169,6 +172,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.fail(w, rc, http.StatusBadRequest, "invalid request JSON")
 			return
 		}
+		pc.AgentID, pc.AgentIDRejected = policy.NormalizeAgentID(r.Header.Get(headerAgentID))
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), p.cfg.MaxResponseDuration)
@@ -203,6 +207,7 @@ func (p *Proxy) forward(ctx context.Context, r *http.Request, body []byte) (*htt
 	}
 	copyHeaders(req.Header, r.Header)
 	req.Header.Del("Content-Length")
+	req.Header.Del(headerAgentID)
 	req.Header.Set("Accept-Encoding", "identity")
 	return p.client.Do(req)
 }

@@ -39,7 +39,9 @@ sub-agents, MCP), extended thinking and long sessions have not been tried, so ex
 - **Not supported:** Codex and any OpenAI-style agent (chat completions or responses APIs). They
   use a different protocol that is not implemented, so they are not protected.
 - Policy in YAML: allowed tools, allowed hosts, path scopes, and how to treat sensitive
-  locations (see [docs/policy.md](docs/policy.md)).
+  locations (see [docs/policy.md](docs/policy.md)). Optional named profiles, selected by the
+  `X-Agent-Guard-Identity` header. Without that map every caller shares one policy. With it, a
+  missing or unknown identity is denied.
 
 ## Quick start
 
