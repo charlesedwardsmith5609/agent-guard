@@ -29,7 +29,8 @@ Run one process. Put a `profiles` map and an `agents` map in the config. See
 
 Each client sends `X-Agent-Guard-Identity` with the identity you listed. The proxy strips that
 header before it forwards the request. A missing identity is denied (`profile-missing`). An
-identity that is not in the map is denied (`profile-unknown`). There is no fallback profile, so
+identity that is not in the map is denied (`profile-unknown`), and so is a request that sends the
+header twice. There is no fallback profile, so
 a client that forgets the header does not run as another agent. A client that sends the wrong
 header on purpose does: the identity is a label, not authentication (see
 [profiles](policy.md#profiles-and-agents)). Do not rely on profiles to keep one agent out of
@@ -68,7 +69,7 @@ cluster-wide switch.
 - One proxy per agent: halt the agent whose file you write. The others keep running.
 
 Put the halt file on a local filesystem, not NFS or FUSE. A read that takes longer than
-2 seconds counts as unreadable and halts the process until that read returns.
+2 seconds counts as unreadable and halts the process (every tool call on it is refused while such a read is stuck).
 
 A missing or corrupt file fails closed for that process only. It does not reach a process that
 was started without `-halt-file`.

@@ -88,6 +88,9 @@ When `profiles` is set:
 - a missing identity is `BLOCK` with rule `profile-missing`
 - an identity that is not in `agents`, or that is not in the alphabet above, is `BLOCK` with
   rule `profile-unknown`
+- a request that carries `X-Agent-Guard-Identity` more than once is also `profile-unknown`, whatever
+  the values are. The proxy never picks one of them. The audit record then has no `agent` field.
+  Without `profiles` the header is ignored, so repeating it changes nothing
 
 There is no implicit profile. An empty `agents` map denies every caller.
 
@@ -286,7 +289,7 @@ Find the call in the audit log (`jq 'select(.decision != "ALLOW")' audit.jsonl`)
 | `sensitive:<class>` | The call touches a sensitive location | Expected. ASK needs your say-so; set the class to `block` to refuse outright |
 | `halt` | The halt file is halted, missing, or corrupt, and the halt arrived while the model was answering. (A request that arrives while halted gets HTTP 503 and has no rule.) The call was refused before the other rules ran | Write `running` to the halt file. See [operations](operations.md#halt) |
 | `profile-missing` | `profiles` is set and the request has no agent identity | Send `X-Agent-Guard-Identity`. See [profiles](#profiles-and-agents) |
-| `profile-unknown` | The identity is not in `agents`, or it is not a usable token | Map the identity to a profile that exists |
+| `profile-unknown` | The identity is not in `agents`, it is not a usable token, or the header was sent more than once | Map the identity to a profile that exists |
 | `fail-closed:error` | The decision itself failed (unparseable input, input too large, a limit) | The audit `reason` and the proxy's stderr log say what failed |
 | `fail-closed:timeout` | The decision took longer than `-decide-timeout` | Usually a stuck or very slow policy evaluation |
 | `fail-closed:overloaded` | Too many decisions were running at once | Retry |

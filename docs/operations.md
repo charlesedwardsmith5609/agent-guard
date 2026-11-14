@@ -103,7 +103,7 @@ dropped and the stream ends with an SSE `error` event of type `api_error` and th
 
 ## Halt
 
-`-halt-file` points at a small text file. The proxy reads it when a request arrives (before anything is sent upstream) and again at the start of every tool-call decision. There is no background poll. The file is opened once, without following a symlink at the final path component (a symlinked parent directory is still followed), and read through a 64-byte limit; the file I/O happens outside the lock. One `Switch` owns the state under one mutex; the rest of the proxy does not keep a halt flag.
+`-halt-file` points at a small text file. The proxy reads it when a request arrives (before anything is sent upstream) and again at the start of every tool-call decision. There is no background poll. The file is opened once, without following a symlink at the final path component (a symlinked parent directory is still followed), and read through a 64-byte limit; the file I/O happens outside the lock. Each read is bounded: if it has not finished after 2 seconds (or sooner if the decision's own deadline, `-decide-timeout`, ends first), the check reports halted and the read is abandoned. While an abandoned read is still stuck in the kernel, or when 8 reads are already running, every check is refused at once without starting another read. Put the file on a local filesystem; a stalled NFS or FUSE mount is the case this guards against, and the stuck goroutine stays until the kernel returns it. One `Switch` owns the state under one mutex; the rest of the proxy does not keep a halt flag.
 
 | File contents (trimmed, case-insensitive) | Effect |
 |-------------------------------------------|--------|
@@ -111,10 +111,11 @@ dropped and the stream ends with an SSE `error` event of type `api_error` and th
 | `halted`, `halt`, or `1` | A request that arrives is refused with HTTP 503 and is not forwarded. A tool call already in flight when the halt lands is replaced with a block notice (`rule: halt`) |
 | anything else, including an empty file | Treated as halted (corrupt) |
 | missing file, symlink, directory, or a file larger than 64 bytes | Treated as halted (unreadable or corrupt) |
+| a read that does not finish within 2 seconds | Treated as halted (`halt control cannot be read (read timed out or is stuck)`) |
 
 A change is noticed by the next decision that starts after the write. A decision that has already entered the rules engine is not interrupted. The worst-case time from a completed write of the control file to the first blocked call is therefore the time until the next tool-call decision starts, plus one file read. That wait is not a poll interval.
 
-Each transition (`halt` or `resume`) is one audit line (`"event":"halt"` or `"event":"resume"`, `"decision":"HALT"` or `"RESUME"`). Each tool call refused mid-request is its own line (`"event":"refusal"`, `"decision":"BLOCK"`, `"rule":"halt"`). The first time a process reads a halted or unreadable file, that read is recorded as `halt`. Starting already running does not write a line.
+Each transition (`halt` or `resume`) is one audit line (`"event":"halt"` or `"event":"resume"`, `"decision":"HALT"` or `"RESUME"`). Each tool call refused mid-request is its own line (`"event":"refusal"`, `"decision":"BLOCK"`, `"rule":"halt"`). The first time a process reads a halted or unreadable file, that read is recorded as `halt`. Starting already running does not write a line. On a platform where the control file cannot be opened safely (not Unix), it is never read and the proxy stays halted.
 
 If the transition cannot be written to the audit log, the call or request is refused (`fail-closed:audit`) and the transition does not take effect. A failed `resume` record keeps the proxy halted; the next request tries the record again.
 
@@ -141,7 +142,7 @@ the program:
 | `latency_ms` | How long the decision took, not including the audit write |
 | `stream` | Whether the response was streamed |
 | `profile` | The policy profile that applied. `default` when the file has no `profiles` map. Empty when the call was refused before a profile applied |
-| `agent` | The agent identity from `X-Agent-Guard-Identity`, reduced the same way as tool names. Omitted when the request had none |
+| `agent` | The agent identity from `X-Agent-Guard-Identity`, reduced the same way as tool names. Omitted when the request had none, or when it carried the header more than once |
 | `event` | `halt`, `resume`, or `refusal` for the halt switch. Omitted on an ordinary decision |
 
 It never contains request headers, API keys or complete request bodies.

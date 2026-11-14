@@ -84,7 +84,7 @@ change the plan or the code until the human decides.
 
 ### Go (`.`)
 
-- Standard library only. `go.mod` must not gain requirements without approval.
+- Third-party modules are limited to `gopkg.in/yaml.v3` and OpenTelemetry (see `go.mod`). `go.mod` must not gain other requirements without approval.
 - Skill: read `skills/go-network-service.md` before writing server code.
 - Shared state has one owner goroutine or one mutex, never both. Name it in every plan.
 - Network tests use a real listener on `127.0.0.1:0` and `net.Dial`, with a deadline on every read.

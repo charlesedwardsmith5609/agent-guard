@@ -12,7 +12,7 @@ Options:
 
 Choice: Option 1. One mutex inside `internal/halt.Switch` owns the last state. No other package stores a halt flag. `-halt-file` is optional so existing deployments keep their current behaviour; when the flag is set, a missing, unreadable, or corrupt file is halted.
 
-Why: A file is one code path and has a natural corrupt state. An endpoint would be a second listener that needs its own bind address and would still need a durable representation to fail closed across a restart. A poll interval would add a delay and a second writer of the flag. Reading the file under the mutex on each decision keeps a single owner and makes the worst-case wait the time until the next decision plus one read, which is the zero-poll case (not an in-memory flag, because the file is the source of truth).
+Why: A file is one code path and has a natural corrupt state. An endpoint would be a second listener that needs its own bind address and would still need a durable representation to fail closed across a restart. A poll interval would add a delay and a second writer of the flag. Reading the file on each decision, with the state under one mutex, keeps a single owner and makes the worst-case wait the time until the next decision plus one read, which is the zero-poll case (not an in-memory flag, because the file is the source of truth).
 
 ## 2026-11-13 Policy could not differ per agent
 
@@ -67,3 +67,24 @@ Choice: Option 1, in `docs/running-many-agents.md`. Halt scope is the process th
 
 Why: A supervisor would be a new service. The two layouts already fall out of the flags that exist. Docs only.
 
+
+## 2026-11-14 The halt file read has a deadline and fails closed
+
+Context: A read of the control file on a stalled network or FUSE mount can block in the kernel and cannot be cancelled. Every decision reads the file, so one stuck read could stall every request.
+
+Options:
+
+1. Read inline and accept the stall.
+2. Run each read in a goroutine, give up after a deadline, treat that as halted, and refuse at once while an abandoned read is stuck or too many reads are running.
+
+Choice: Option 2. The deadline is 2 seconds, or the decision's own deadline if that is shorter. At most 8 reads run at once. The abandoned goroutine stays until the kernel returns it. File I/O stays outside the mutex.
+
+Why: A hung filesystem must not turn into a hung proxy or an allowed call. The cost is that a slow but healthy mount halts the proxy; the docs say to use a local filesystem.
+
+## 2026-11-14 A repeated identity header is an unknown identity
+
+Context: A client (or an intermediary) can send `X-Agent-Guard-Identity` twice. Taking the first or last value would let whoever controls one copy choose the profile.
+
+Choice: With `profiles` set, a request with more than one copy of the header is `profile-unknown` (BLOCK) and the audit record has no `agent`. Without `profiles` the header is ignored. This does not make the identity authentication; it is still a label the client sets.
+
+Why: Fail closed on ambiguity. `plans/step-10.md` listed this as a suggestion; it was implemented afterwards.

@@ -24,8 +24,9 @@ SDK and the stdout exporter), plus their transitive modules. MIT licensed.
 Pre-1.0. The behaviour described here is covered by automated tests that run the real code over
 real loopback sockets against fake upstreams, including the documented Anthropic streaming event
 format. It has also been run against the **live Anthropic API** with a small model, streaming and
-non-streaming (`scripts/live-test.sh`, 17 checks), and with a **real Claude Code session**
-(`scripts/live-claude-test.sh`, 7 checks, Claude Code 2.1.319): allowed, asked and blocked calls,
+non-streaming (`scripts/live-test.sh`, 17 checks when last run), and with a **real Claude Code session**
+(`scripts/live-claude-test.sh`, 7 checks, Claude Code 2.1.319). Those scripts spend API credit, are
+not part of `scripts/check.sh`, and were not re-run for this documentation pass: allowed, asked and blocked calls,
 a response mixing allowed and blocked calls, and the API key staying out of the logs.
 
 That is still narrow: one small model, Claude Code in headless mode (`-p`) with only the `Read` and
@@ -41,7 +42,9 @@ sub-agents, MCP), extended thinking and long sessions have not been tried, so ex
 - Policy in YAML: allowed tools, allowed hosts, path scopes, and how to treat sensitive
   locations (see [docs/policy.md](docs/policy.md)). Optional named profiles, selected by the
   `X-Agent-Guard-Identity` header. Without that map every caller shares one policy. With it, a
-  missing or unknown identity is denied. The identity is a label, not authentication: see
+  missing, unknown or repeated identity is denied (a request that carries the header more than
+  once is treated as an unusable identity, `profile-unknown`). The identity is a label, not
+  authentication: see
   [profiles](docs/policy.md#profiles-and-agents) and
   [running many agents](docs/running-many-agents.md).
 
@@ -118,7 +121,9 @@ run. `halted`, a missing file, or anything the proxy cannot parse stops new requ
 reach the upstream (HTTP 503) and refuses any tool call already in flight. Update the file with
 write-temp-then-rename, not `echo >`. Keep the file on a local filesystem: a read
 that does not finish within 2 seconds (for example on a stalled NFS or FUSE mount) is treated as
-unreadable and halts, and while such a read is stuck every check is refused at once. The worst-case time
+unreadable and halts (fail closed), and while such a read is stuck every check is refused at once
+without starting another read. On a platform without the needed `open` flags (not Unix) the file
+is never read and the proxy stays halted. The worst-case time
 from a completed write of that file to the first blocked call is the wait until the next
 decision starts, plus one file read. A decision already inside the rules engine is not
 interrupted. Halt, resume, and each refusal are audit lines. Details are in
@@ -131,6 +136,16 @@ the audit record. An ALLOW is released only after its audit record has been *wri
 write fails or does not finish within the decision timeout, the call is blocked
 (`fail-closed:audit`).
 
+## Checks and review scripts
+
+Run `bash scripts/check.sh` after any change. It runs two helper checks (`scripts/misbehavior-check.sh`,
+`scripts/assertion-check.sh`; they warn, and fail under `PAIRING_STRICT=1`), then `gofmt`, `go vet`,
+`govulncheck` and `go test -race -count=1 ./...`, and prints `CHECK PASSED` or `CHECK FAILED`. The
+repository also holds the scripts used to review it: `scripts/plan-review.sh` and
+`scripts/cross-review.sh` send a plan or a diff to a second AI provider you configure, and
+`scripts/live-test.sh` and `scripts/live-claude-test.sh` run against the real API. See
+[docs/development.md](docs/development.md).
+
 ## Documentation
 
 | Document | What is in it |
@@ -140,9 +155,10 @@ write fails or does not finish within the decision timeout, the call is blocked
 | [docs/development.md](docs/development.md) | Building, testing, repository layout, conventions |
 | [docs/ask-verdict.md](docs/ask-verdict.md) | What Ask does today, the gaps, and a proposed deny-on-timeout for unattended runs |
 | [docs/running-many-agents.md](docs/running-many-agents.md) | One proxy per agent, or one shared proxy with profiles: audit correlation and halt scope |
+| [CHANGELOG.md](CHANGELOG.md) | User-visible changes |
 | [SECURITY.md](SECURITY.md) | Scope and how to report a vulnerability |
 | [examples/policy.yaml](examples/policy.yaml) | A commented starting policy (tested to load) |
-| [REQUIREMENTS.md](REQUIREMENTS.md), [plans/](plans/) | Requirements, design decisions and the design history |
+| [REQUIREMENTS.md](REQUIREMENTS.md), [DECISIONS.md](DECISIONS.md), [plans/](plans/) | Requirements, design decisions and the design history |
 
 ## Threat model
 
