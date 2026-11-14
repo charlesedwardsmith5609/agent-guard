@@ -188,7 +188,10 @@ From each string, agent-guard collects:
 
 1. **URLs**: the host of anything shaped like `scheme://authority/...`. The authority ends at the
    first `/`, `?` or `#`, so `http://evil.com?@github.com` is `evil.com`, and
-   `http://github.com@evil.com/` is `evil.com`.
+   `http://github.com@evil.com/` is `evil.com`. The host is the part after the last `@`, including
+   a bracketed IPv6 address (`http://github.com@[2001:db8::1]/` is `2001:db8::1`, not
+   `github.com`). A port is removed. Trailing dots and letter case are folded
+   (`GitHub.COM.` is `github.com`).
 2. **`user@host:` forms**, as in `git@github.com:org/repo.git`.
 3. **IPv4 literals**, such as `10.0.0.5`.
 4. **Words in shell-style text**. The text is split into tokens at spaces, quotes and a few
@@ -217,11 +220,15 @@ From each string, agent-guard collects:
 A host that is not in `hosts` is allowed if it appears in a **user** message anywhere in the
 conversation. The match is on whole words, case-insensitive: the text must contain `example.com`
 as a word (a trailing full stop is fine), not `notexample.com` or `example.com.attacker.net`.
-Tool results are never consulted, so a web page cannot authorise its own host. The mention must
-use the same spelling as the call: if the call uses `169.254.43518`, writing `169.254.169.254` in
-the prompt does not authorise it.
+Tool results are never consulted, so a web page cannot authorise its own host. The mention is
+compared to the stored host, not to every raw spelling in the call.
 
 A mention only satisfies the `hosts` rule. It never clears a `sensitive:` rule.
+
+Numeric and IPv6 spellings are stored in one canonical form before the allowlist and the mention
+check (so `2130706433`, `0x7f000001` and `0177.0.0.1` are `127.0.0.1`, and `[::ffff:127.0.0.1]`
+is `127.0.0.1` as well). The mention has to contain that stored form. Writing `2130706433` does
+not authorise a call whose stored host is `127.0.0.1`. Writing `127.0.0.1` does.
 
 ### What the host detection cannot do
 
@@ -237,8 +244,8 @@ It is a heuristic and will both miss things and over-block:
 - It can over-block: URLs inside request data (`curl --data https://x.com ...`) are counted as
   hosts, a remote file name after `ssh host cat release.zip` can be read as a host, and any
   dotted word ending in a listed TLD is a host.
-- Only text inside the tool's input is examined. Nothing is resolved: a name that points at a
-  forbidden address passes if the name is allowed.
+- Only text inside the tool's input is examined. The guard sees those arguments, not packets:
+  nothing is resolved, and a name that points at a forbidden address passes if the name is allowed.
 
 ## How sensitive paths are detected
 

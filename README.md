@@ -154,7 +154,9 @@ and the usual credential locations.
    (`server_tool_use`), MCP servers acting on their own, the harness's own file and network
    activity, and text in the model's replies are not inspected. Other protocols (OpenAI chat or
    responses, Codex) are not handled at all.
-3. **Shell obfuscation.** Command text is parsed with heuristics, not a shell parser. Variable
+3. **Shell obfuscation.** Command text is parsed with heuristics, not a shell parser. The guard
+   sees tool arguments, not packets: it does not watch DNS, sockets, or bytes on the wire. A
+   destination that never appears in the arguments is not checked. Variable
    expansion, command substitution, base64 or other encodings, globbing, `eval`, here-documents,
    aliases, and scripts the agent writes and then runs can all hide a host or a path. Tokenizing
    is not quote-aware, only `curl` and `wget` option values are understood, and unusual

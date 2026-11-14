@@ -28,3 +28,16 @@ Choice: Option 2. The header is `X-Agent-Guard-Identity`. It is stripped before 
 
 Why: Option 3 would invent an API field. Option 1 does not meet the request. Denying unknown identities is the fail-closed default. Keeping the single-file form means existing policies do not start denying every call the moment this ships. The header is operator-supplied; nothing in the model protocol already carried an agent id.
 
+## 2026-11-13 Host spelling is canonicalized before the allowlist
+
+Context: Decimal, hex, and octal IPv4 spellings were already rewritten to dotted form. Bracketed IPv6 after userinfo was not: the URL match stopped at `[`, so `http://github.com@[2001:db8::1]/` produced an empty host and the call could be allowed. Trailing dots were trimmed only once. Mixed case and ports were already handled for ordinary URLs.
+
+Options:
+
+1. Add tests only where the current code already blocks.
+2. Keep one stored form per address (dotted IPv4, compressed IPv6, IPv4-mapped addresses unmapped) and parse the authority through the last `@`, including brackets.
+
+Choice: Option 2. The allowlist is stored in that same form. A mention matches the stored form, which is what the code already did for loose IPv4; the docs that said the opposite were corrected. This does not treat a name that later resolves to a forbidden address as that address. The guard still sees tool arguments, not packets.
+
+Why: An empty host is an allow. Matching `::ffff:127.0.0.1` to an allowlisted `127.0.0.1` is the same address, not a new destination. Leaving the bracket case unparsed would hide the real host behind an allowlisted name in the userinfo.
+

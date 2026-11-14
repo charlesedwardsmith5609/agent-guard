@@ -33,7 +33,9 @@ var pathKeys = map[string]bool{
 }
 
 var (
-	urlRe  = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://([^\s/?#'"<>)\]\\]+|\[[0-9A-Fa-f:.]+\])`)
+	// The authority runs up to / ? # or a delimiter. ']' stays inside the match so
+	// user@[2001:db8::1] is one authority; authorityHost then keeps the host.
+	urlRe  = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://([^\s/?#'"<>)\\]+)`)
 	scpRe  = regexp.MustCompile(`[\w.\-]+@([A-Za-z0-9][A-Za-z0-9.\-]*[A-Za-z0-9]):`)
 	ipv4Re = regexp.MustCompile(`(?:^|[^0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:$|[^0-9.])`)
 )
@@ -162,16 +164,33 @@ func (w *walker) fail(err error) {
 }
 
 func (w *walker) addHost(h string) {
-	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	h = canonicalHost(h)
 	if h == "" {
 		return
-	}
-	if ip, ok := looseIPv4(h); ok {
-		h = ip
 	}
 	if !w.hosts.add(h) {
 		w.fail(errTooMany)
 	}
+}
+
+// canonicalHost folds a host to the form the allowlist is stored in: lower
+// case, no trailing dots, and one spelling for addresses that are the same
+// number (decimal, hex, octal, and IPv4-mapped IPv6).
+func canonicalHost(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	for strings.HasSuffix(h, ".") {
+		h = strings.TrimSuffix(h, ".")
+	}
+	if len(h) >= 2 && h[0] == '[' && h[len(h)-1] == ']' {
+		h = h[1 : len(h)-1]
+	}
+	if ip, ok := looseIPv4(h); ok {
+		return ip
+	}
+	if addr, err := netip.ParseAddr(h); err == nil {
+		return addr.Unmap().String()
+	}
+	return h
 }
 
 func (w *walker) addCandidate(p string) {

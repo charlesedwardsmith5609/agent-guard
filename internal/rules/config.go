@@ -214,7 +214,7 @@ func buildEngine(fc profileBody, opt Options) (*Engine, error) {
 		}
 	}
 	for _, h := range *fc.Hosts {
-		h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+		h = canonicalHost(h)
 		if rest, ok := strings.CutPrefix(h, "*."); ok {
 			if !validHost(rest) {
 				return nil, fmt.Errorf("config: invalid host pattern %q", h)
