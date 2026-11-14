@@ -1,12 +1,18 @@
 # Cross-model review: send the current diff to a different AI provider for an independent review.
 # Usage: pwsh -NoProfile -File scripts/cross-review.ps1 [-Provider openai|anthropic] [-Model NAME] [-Base REF]
+#        [-Include PATH,PATH]
+# Only tracked changes are sent. An untracked file is sent only when you name it with -Include.
+# Paths matching the deny list below (.env*, keys, credentials) are never sent, even if named.
+# The request is scanned with gitleaks first. If gitleaks is missing or fails, nothing is sent.
+# scripts/cross-review.sh must keep the same deny list and behavior.
 # Env:   OPENAI_API_KEY / ANTHROPIC_API_KEY, optional REVIEW_PROVIDER, REVIEW_MODEL,
 #        OPENAI_BASE_URL, ANTHROPIC_BASE_URL
 param(
     [ValidateSet('openai', 'anthropic')]
     [string]$Provider = $(if ($env:REVIEW_PROVIDER) { $env:REVIEW_PROVIDER } else { 'openai' }),
     [string]$Model = $env:REVIEW_MODEL,
-    [string]$Base = 'HEAD'
+    [string]$Base = 'HEAD',
+    [string[]]$Include = @()
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
@@ -24,14 +30,47 @@ if ($Provider -eq 'openai') {
 }
 if (-not $key) { Write-Error "Missing API key for $Provider"; exit 2 }
 
-# Include new, untracked files in the diff without staging their content.
-& git add --intent-to-add --all 2>$null | Out-Null
+function Fail([string]$Message, [int]$Code) { [Console]::Error.WriteLine($Message); exit $Code }
+
+# Deny list (keep identical to scripts/cross-review.sh). Base names, then directories.
+$denyNames = @('.env*', '*.pem', '*.key', '*.p12', '*.pfx', '*.jks', '*.keystore', '*.kdbx', 'id_rsa*', 'id_dsa*',
+    'id_ecdsa*', 'id_ed25519*', '*credential*', '.netrc', '.npmrc', '.pypirc', '.git-credentials', '*.tfstate', '*.tfvars')
+$denyDirs = @('.aws', '.ssh', '.gnupg')
+function Test-Denied([string]$Path) {
+    $p = '/' + ($Path -replace '\\', '/')
+    foreach ($pat in $denyNames) { if ($p -like "*/$pat") { return $true } }
+    foreach ($pat in $denyDirs) { if ($p -like "*/$pat/*") { return $true } }
+    return $false
+}
+$excludes = @(':(exclude)go.sum', ':(exclude)**/go.sum', ':(exclude)package-lock.json', ':(exclude)**/package-lock.json')
+foreach ($pat in $denyNames) { $excludes += ":(exclude,glob)**/$pat" }
+foreach ($pat in $denyDirs) { $excludes += ":(exclude,glob)**/$pat/**" }
+
+# Named untracked files, validated before anything is read.
+$root = (Get-Location).ProviderPath
+$includeFiles = @()
+foreach ($f in $Include) {
+    if (Test-Denied $f) { Fail "Refusing -Include $f: it matches the secret-file deny list. Nothing was sent." 2 }
+    $item = Get-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.PSIsContainer -or $item.LinkType) { Fail "-Include ${f}: not a regular file (symlinks are refused)." 2 }
+    $full = $item.FullName
+    if (-not $full.StartsWith($root + [IO.Path]::DirectorySeparatorChar)) { Fail "-Include ${f}: outside the repository." 2 }
+    $rel = $full.Substring($root.Length + 1) -replace '\\', '/'
+    if (Test-Denied $rel) { Fail "Refusing -Include $f: it matches the secret-file deny list. Nothing was sent." 2 }
+    & git ls-files --error-unmatch -- $rel 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { continue }   # tracked: already in the diff
+    $includeFiles += $rel
+}
+
+& git rev-parse -q --verify "$Base^{commit}" 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { Fail "unknown base: $Base" 2 }
+# Tracked changes only. This does not touch the index, so untracked files stay untracked.
 function Get-ReviewDiff([string]$Ref) {
-    (& git diff --no-color $Ref -- . ':(exclude)go.sum' ':(exclude)**/go.sum' ':(exclude)**/package-lock.json' | Out-String)
+    (& git diff --no-color $Ref -- . @excludes | Out-String)
 }
 $diff = Get-ReviewDiff $Base
 # Nothing uncommitted and no -Base given: review the last commit instead.
-if (-not $diff.Trim() -and -not $PSBoundParameters.ContainsKey('Base')) {
+if (-not $diff.Trim() -and -not $PSBoundParameters.ContainsKey('Base') -and $includeFiles.Count -eq 0) {
     & git rev-parse -q --verify HEAD~1 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
         $Base = 'HEAD~1'
@@ -39,6 +78,9 @@ if (-not $diff.Trim() -and -not $PSBoundParameters.ContainsKey('Base')) {
         Write-Host "(If the milestone spans several commits, rerun with -Base REF.)" -ForegroundColor DarkGray
         $diff = Get-ReviewDiff $Base
     }
+}
+foreach ($rel in $includeFiles) {
+    $diff += (& git diff --no-color --no-index -- /dev/null $rel | Out-String)
 }
 if (-not $diff.Trim()) { Write-Host "No changes against $Base. Nothing to review."; exit 0 }
 $max = 60000
@@ -48,12 +90,13 @@ if ($diff.Length -gt $max) {
 }
 
 $system = Get-Content -Raw -Encoding UTF8 'skills/review-checklist.md'
-$user = "Review this diff:`n`n``````diff`n$diff`n``````"
+$user = "Review this diff. Apply the security-review pass: SSRF, information exposure, and secret handling.`n`n``````diff`n$diff`n``````"
 
-# Secret scan before anything leaves this machine. A finding refuses the review. If gitleaks is
-# not installed this only warns and the review goes ahead unscanned.
+# Secret scan before anything leaves this machine. Fails closed: a finding, a missing gitleaks,
+# or a scanner failure all refuse the review and nothing is sent.
 if (-not (Get-Command gitleaks -ErrorAction SilentlyContinue)) {
-    Write-Warning "gitleaks is not installed; sending this review to $Provider WITHOUT a secret scan."
+    Write-Error "gitleaks is not installed, so the secret scan cannot run. Nothing was sent."
+    exit 1
 } else {
     $ErrorActionPreference = 'Continue'   # native stderr must not throw while we capture it
     # `gitleaks stdin` is the current form; older 8.x releases only have `detect --pipe`.

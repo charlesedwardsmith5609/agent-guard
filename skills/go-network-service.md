@@ -43,7 +43,9 @@ to any specific problem.
 - Telnet and Windows clients send `\r\n`. Trim `\r`.
 - Treat all peer input as untrusted text that will be shown on other people's terminals. Reject
   or strip control characters, especially ESC (`0x1b`), to prevent terminal escape injection.
-  Validate UTF-8.
+  Validate UTF-8. On Go 1.27+, prefer `encoding/json/v2` for new JSON request parsing: stricter
+  defaults reject invalid UTF-8 and duplicate keys
+  (https://go.dev/blog/jsonv2).
 - Identifiers chosen by peers (names, handles) get an allowlist: length bounds and a character
   set. Decide case sensitivity for uniqueness. Reserve names that could impersonate the system.
 
