@@ -1,6 +1,7 @@
 package halt
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func TestInterpret(t *testing.T) {
 // its audit record succeeds.
 func commit(t *testing.T, s *Switch) Result {
 	t.Helper()
-	r := s.Check()
+	r := s.Check(context.Background())
 	if r.Transition != "" && !s.Commit(r) {
 		t.Fatalf("commit of %q rejected", r.Transition)
 	}
@@ -93,10 +94,10 @@ func TestFirstRunningReadCommitsWithoutTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(path)
-	if r := s.Check(); r.Halted || r.Transition != "" {
+	if r := s.Check(context.Background()); r.Halted || r.Transition != "" {
 		t.Fatalf("first running read: %+v", r)
 	}
-	if r := s.Check(); r.Halted || r.Transition != "" {
+	if r := s.Check(context.Background()); r.Halted || r.Transition != "" {
 		t.Fatalf("second running read: %+v", r)
 	}
 }
@@ -138,7 +139,7 @@ func TestUnsafeControlFilesFailClosed(t *testing.T) {
 	for name, path := range map[string]string{"fifo": fifo, "dev-zero symlink": zero, "directory": subdir, "over 64 bytes": big} {
 		t.Run(name, func(t *testing.T) {
 			var r Result
-			within(t, "Check", func() { r = New(path).Check() })
+			within(t, "Check", func() { r = New(path).Check(context.Background()) })
 			if !r.Halted || r.Transition != "halt" || !strings.Contains(r.Reason, "corrupt") {
 				t.Fatalf("got %+v", r)
 			}
@@ -146,7 +147,7 @@ func TestUnsafeControlFilesFailClosed(t *testing.T) {
 	}
 	t.Run("exactly 64 bytes is accepted", func(t *testing.T) {
 		var r Result
-		within(t, "Check", func() { r = New(exact).Check() })
+		within(t, "Check", func() { r = New(exact).Check(context.Background()) })
 		if r.Halted {
 			t.Fatalf("got %+v", r)
 		}
@@ -196,11 +197,11 @@ func TestReadHappensOutsideMutex(t *testing.T) {
 	s := New("unused")
 	s.read = g.read
 	got := make(chan Result, 1)
-	go func() { got <- s.Check() }()
+	go func() { got <- s.Check(context.Background()) }()
 	waitFor(t, g.entered, "first read to start")
 	// The first Check is parked inside the reader. If it held mu, this would hang.
 	var r Result
-	within(t, "second Check", func() { r = s.Check() })
+	within(t, "second Check", func() { r = s.Check(context.Background()) })
 	if r.Halted {
 		t.Fatalf("second check: %+v", r)
 	}
@@ -219,7 +220,7 @@ func TestStaleObservationIsNotApplied(t *testing.T) {
 	s := New("unused")
 	s.read = g.read
 	got := make(chan Result, 1)
-	go func() { got <- s.Check() }() // A observes "running" and parks
+	go func() { got <- s.Check(context.Background()) }() // A observes "running" and parks
 	waitFor(t, g.entered, "A's read")
 
 	g.set("halted")
@@ -237,7 +238,7 @@ func TestStaleObservationIsNotApplied(t *testing.T) {
 	if !a.Halted || a.Transition != "" {
 		t.Fatalf("A applied a stale resume: %+v", a)
 	}
-	if r := s.Check(); !r.Halted {
+	if r := s.Check(context.Background()); !r.Halted {
 		t.Fatalf("state was resumed: %+v", r)
 	}
 }
@@ -252,18 +253,18 @@ func TestAbortRetriesAndProposalExcludesOthers(t *testing.T) {
 	commit(t, s) // committed: halted
 	set("running")
 
-	r := s.Check()
+	r := s.Check(context.Background())
 	if r.Transition != "resume" || r.Halted {
 		t.Fatalf("proposal: %+v", r)
 	}
-	if o := s.Check(); !o.Halted || o.Transition != "" || o.Reason != reasonBusy {
+	if o := s.Check(context.Background()); !o.Halted || o.Transition != "" || o.Reason != reasonBusy {
 		t.Fatalf("another caller during a proposal: %+v", o)
 	}
 	s.Abort(r) // the audit write failed
 	if s.Commit(r) {
 		t.Fatal("an aborted proposal must not commit")
 	}
-	r2 := s.Check()
+	r2 := s.Check(context.Background())
 	if r2.Transition != "resume" {
 		t.Fatalf("an aborted transition must be proposed again: %+v", r2)
 	}
@@ -273,7 +274,7 @@ func TestAbortRetriesAndProposalExcludesOthers(t *testing.T) {
 	if s.Commit(r2) {
 		t.Fatal("a proposal commits once")
 	}
-	if r := s.Check(); r.Halted || r.Transition != "" {
+	if r := s.Check(context.Background()); r.Halted || r.Transition != "" {
 		t.Fatalf("after commit: %+v", r)
 	}
 }
@@ -282,5 +283,73 @@ func TestMissingFileIsNotExist(t *testing.T) {
 	_, err := readControl(filepath.Join(t.TempDir(), "nope"))
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// A read that never returns (stalled NFS/FUSE) must not hang Check.
+func TestStalledReadFailsClosedAndLaterChecksRefuseAtOnce(t *testing.T) {
+	g := newGatedReader("running")
+	defer close(g.gate)
+	s := New("unused")
+	s.read = g.read
+	s.timeout = 50 * time.Millisecond
+	var r Result
+	within(t, "Check on a stalled read", func() { r = s.Check(context.Background()) })
+	if !r.Halted || !strings.Contains(r.Reason, "cannot be read") {
+		t.Fatalf("stalled read: %+v", r)
+	}
+	// The stuck read is still in flight: refuse without starting another.
+	within(t, "Check while a read is stuck", func() { r = s.Check(context.Background()) })
+	if !r.Halted || !strings.Contains(r.Reason, "cannot be read") {
+		t.Fatalf("second check: %+v", r)
+	}
+	g.mu.Lock()
+	calls := g.calls
+	g.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("reader started %d times, want 1", calls)
+	}
+}
+
+func TestStuckReadClearsWhenItReturns(t *testing.T) {
+	g := newGatedReader("running")
+	s := New("unused")
+	s.read = g.read
+	s.timeout = 50 * time.Millisecond
+	if r := s.Check(context.Background()); !r.Halted {
+		t.Fatalf("stalled: %+v", r)
+	}
+	close(g.gate)
+	deadline := time.Now().Add(5 * time.Second)
+	for s.stuck.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("stuck mark never cleared")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if r := s.Check(context.Background()); r.Halted {
+		t.Fatalf("after recovery: %+v", r)
+	}
+}
+
+func TestCallerDeadlineAndInflightCap(t *testing.T) {
+	s := New("unused")
+	block := make(chan struct{})
+	defer close(block)
+	s.read = func(string) (string, error) { <-block; return "running", nil }
+	s.sem = make(chan struct{}, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if r := s.Check(ctx); !r.Halted || !strings.Contains(r.Reason, "cannot be read") {
+		t.Fatalf("deadline: %+v", r)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("caller deadline ignored")
+	}
+	// Cap path: clear the stuck mark so only the full semaphore refuses.
+	s.stuck.Store(0)
+	if r := s.Check(context.Background()); !r.Halted || !strings.Contains(r.Reason, "cannot be read") {
+		t.Fatalf("cap: %+v", r)
 	}
 }

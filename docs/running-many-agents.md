@@ -67,6 +67,9 @@ cluster-wide switch.
 - Shared proxy: one file halts every agent using that process.
 - One proxy per agent: halt the agent whose file you write. The others keep running.
 
+Put the halt file on a local filesystem, not NFS or FUSE. A read that takes longer than
+2 seconds counts as unreadable and halts the process until that read returns.
+
 A missing or corrupt file fails closed for that process only. It does not reach a process that
 was started without `-halt-file`.
 

@@ -5,19 +5,35 @@
 package halt
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 const maxControlBytes = 64
+
+const (
+	// readTimeout bounds one control-file read when the caller's context has no
+	// earlier deadline.
+	readTimeout = 2 * time.Second
+	// maxInflightReads caps reads running at once, including stuck ones.
+	maxInflightReads = 8
+)
 
 // Switch is the only owner of halt state. mu guards known, halted, gen and pending.
 // Callers must not keep a halt flag of their own; they call Check and, when it
 // reports a transition, record it and then Commit (or Abort). File I/O happens
 // outside mu.
+//
+// The control file must be on a local filesystem. A read on a stalled network or
+// FUSE mount can block in the kernel and cannot be cancelled; Check abandons it
+// after a deadline and fails closed, but the blocked goroutine stays until the
+// kernel returns it.
 type Switch struct {
 	mu      sync.Mutex
 	path    string
@@ -26,6 +42,10 @@ type Switch struct {
 	halted  bool
 	gen     uint64    // incremented on every commit
 	pending *proposal // the one transition awaiting its audit record
+
+	sem     chan struct{} // in-flight read slots
+	stuck   atomic.Int32  // reads that passed their deadline and have not returned
+	timeout time.Duration
 }
 
 type proposal struct {
@@ -47,6 +67,7 @@ type Result struct {
 const (
 	reasonBusy  = "halt transition is being recorded; failing closed"
 	reasonStale = "halt control changed while being read; failing closed"
+	reasonStuck = "halt control cannot be read (read timed out or is stuck); failing closed"
 )
 
 // maxStaleRetries bounds how often one Check re-reads after another caller committed.
@@ -55,7 +76,8 @@ const maxStaleRetries = 3
 // New returns a switch for path. The state starts unknown and is treated as
 // halted until a read says otherwise, so a missing file fails closed.
 func New(path string) *Switch {
-	return &Switch{path: path, halted: true, read: readControl}
+	return &Switch{path: path, halted: true, read: readControl,
+		sem: make(chan struct{}, maxInflightReads), timeout: readTimeout}
 }
 
 // Check reads the control file and reports whether calls must be refused.
@@ -67,15 +89,24 @@ func New(path string) *Switch {
 // call Abort. The first Check that finds the proxy halted proposes "halt"; the
 // first that finds it running commits at once and reports no transition.
 //
+// ctx bounds the read; a shorter deadline than readTimeout wins. If the read does
+// not finish in time, Check reports Halted with a "cannot be read" reason. While
+// a timed-out read is still stuck, or when maxInflightReads reads are running,
+// Check refuses at once without starting another read.
+//
 // A missing file, a read error, a symlink, a non-regular file, or contents other
 // than the documented tokens are halted. Reason says which.
-func (s *Switch) Check() Result {
+func (s *Switch) Check(ctx context.Context) Result {
 	for try := 0; try < maxStaleRetries; try++ {
 		s.mu.Lock()
 		gen := s.gen
 		s.mu.Unlock()
 
-		next, why := interpret(s.read(s.path)) // I/O outside the mutex
+		text, err := s.boundedRead(ctx) // I/O outside the mutex
+		if errors.Is(err, errStuck) {
+			return Result{Halted: true, Reason: reasonStuck}
+		}
+		next, why := interpret(text, err)
 
 		s.mu.Lock()
 		if s.gen != gen {
@@ -87,6 +118,56 @@ func (s *Switch) Check() Result {
 		return r
 	}
 	return Result{Halted: true, Reason: reasonStale}
+}
+
+var errStuck = errors.New("halt: control read stuck")
+
+// boundedRead runs s.read in a goroutine and waits for it until ctx or the
+// switch's timeout expires. It returns errStuck instead of starting a read when
+// one is already stuck or the in-flight cap is reached.
+func (s *Switch) boundedRead(ctx context.Context) (string, error) {
+	if s.stuck.Load() > 0 {
+		return "", errStuck
+	}
+	select {
+	case s.sem <- struct{}{}:
+	default:
+		return "", errStuck
+	}
+	type out struct {
+		text string
+		err  error
+	}
+	res := make(chan out, 1)
+	var timedOut atomic.Bool
+	go func() {
+		text, err := s.read(s.path)
+		<-s.sem
+		res <- out{text, err} // buffered: never blocks
+		// Exactly one side clears the stuck mark: whoever wins this CAS.
+		if timedOut.CompareAndSwap(true, false) {
+			s.stuck.Add(-1)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	select {
+	case o := <-res:
+		return o.text, o.err
+	case <-ctx.Done():
+		// Mark the read stuck, then re-check: it may have finished in between.
+		s.stuck.Add(1)
+		timedOut.Store(true)
+		select {
+		case o := <-res:
+			if timedOut.CompareAndSwap(true, false) {
+				s.stuck.Add(-1)
+			}
+			return o.text, o.err
+		default:
+		}
+		return "", errStuck
+	}
 }
 
 func (s *Switch) decideLocked(next bool, why string) Result {

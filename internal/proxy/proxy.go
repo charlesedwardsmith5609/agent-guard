@@ -428,7 +428,7 @@ func (p *Proxy) checkHalt(ctx context.Context) (refuse bool, rule, why string) {
 	if p.cfg.Halt == nil {
 		return false, "", ""
 	}
-	r := p.cfg.Halt.Check()
+	r := p.cfg.Halt.Check(ctx)
 	if r.Transition != "" {
 		if err := p.recordControl(ctx, r.Transition, r.Reason); err != nil {
 			p.cfg.Halt.Abort(r)

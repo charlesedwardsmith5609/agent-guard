@@ -107,7 +107,7 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 	var haltSwitch *halt.Switch
 	if o.haltFile != "" {
 		haltSwitch = halt.New(o.haltFile)
-		r := haltSwitch.Check()
+		r := haltSwitch.Check(context.Background())
 		if r.Transition != "" {
 			cctx, cancel := context.WithTimeout(context.Background(), o.decideTimeout)
 			err := auditLog.RecordControl(cctx, r.Transition, r.Reason)
