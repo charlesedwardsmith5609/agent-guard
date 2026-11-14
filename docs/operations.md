@@ -103,20 +103,22 @@ dropped and the stream ends with an SSE `error` event of type `api_error` and th
 
 ## Halt
 
-`-halt-file` points at a small text file. The proxy reads it under one mutex at the start of every tool-call decision. There is no background poll. One `Switch` owns the state; the rest of the proxy does not keep a halt flag.
+`-halt-file` points at a small text file. The proxy reads it when a request arrives (before anything is sent upstream) and again at the start of every tool-call decision. There is no background poll. The file is opened once, without following a symlink at the final path component (a symlinked parent directory is still followed), and read through a 64-byte limit; the file I/O happens outside the lock. One `Switch` owns the state under one mutex; the rest of the proxy does not keep a halt flag.
 
 | File contents (trimmed, case-insensitive) | Effect |
 |-------------------------------------------|--------|
 | `running`, `run`, or `0` | Tool calls are judged as usual |
-| `halted`, `halt`, or `1` | Every tool call is replaced with a block notice (`rule: halt`) |
+| `halted`, `halt`, or `1` | A request that arrives is refused with HTTP 503 and is not forwarded. A tool call already in flight when the halt lands is replaced with a block notice (`rule: halt`) |
 | anything else, including an empty file | Treated as halted (corrupt) |
 | missing file, symlink, directory, or a file larger than 64 bytes | Treated as halted (unreadable or corrupt) |
 
 A change is noticed by the next decision that starts after the write. A decision that has already entered the rules engine is not interrupted. The worst-case time from a completed write of the control file to the first blocked call is therefore the time until the next tool-call decision starts, plus one file read. That wait is not a poll interval.
 
-Each transition (`halt` or `resume`) is one audit line (`"event":"halt"` or `"event":"resume"`, `"decision":"HALT"` or `"RESUME"`). Each refused call is its own line (`"event":"refusal"`, `"decision":"BLOCK"`, `"rule":"halt"`). The first time a process reads a halted or unreadable file, that read is recorded as `halt`. Starting already running does not write a line.
+Each transition (`halt` or `resume`) is one audit line (`"event":"halt"` or `"event":"resume"`, `"decision":"HALT"` or `"RESUME"`). Each tool call refused mid-request is its own line (`"event":"refusal"`, `"decision":"BLOCK"`, `"rule":"halt"`). The first time a process reads a halted or unreadable file, that read is recorded as `halt`. Starting already running does not write a line.
 
-If the transition cannot be written to the audit log, the call is blocked (`fail-closed:audit`).
+If the transition cannot be written to the audit log, the call or request is refused (`fail-closed:audit`) and the transition does not take effect. A failed `resume` record keeps the proxy halted; the next request tries the record again.
+
+Write the control file atomically: write a temporary file in the same directory, then `mv` it over the control file. `echo running > file` truncates first, so a read in between sees an empty file and records a false halt (and a false resume).
 
 ## Audit log
 

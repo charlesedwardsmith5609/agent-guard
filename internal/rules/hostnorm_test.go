@@ -145,3 +145,70 @@ func TestHostSmuggling(t *testing.T) {
 		})
 	}
 }
+
+// Finding 7: a candidate that is not a valid host name or address never matches a
+// wildcard entry, whatever path produced it.
+func TestInvalidHostNeverMatchesWildcard(t *testing.T) {
+	e := newEngine(t, baseCfg) // allows *.pypi.org and github.com
+	for _, h := range []string{"evil.example%2f.pypi.org", "evil.example!.pypi.org", "a b.pypi.org", ".pypi.org", "..pypi.org", "-x.pypi.org", "evil.example%2fgithub.com"} {
+		if e.hostAllowed(h) {
+			t.Errorf("hostAllowed(%q) = true", h)
+		}
+	}
+	for _, h := range []string{"files.pypi.org", "github.com", "a.b.pypi.org"} {
+		if !e.hostAllowed(h) {
+			t.Errorf("hostAllowed(%q) = false", h)
+		}
+	}
+	// Through the engine, the URL form is refused outright.
+	_, err := e.Decide(context.Background(), policy.Context{}, policy.ToolCall{Name: "WebFetch", Input: []byte(obj("url", "http://evil.example%2f.pypi.org/"))})
+	if err == nil {
+		t.Error("URL with a percent-encoded slash in the host was not refused")
+	}
+}
+
+// Finding 8: only decimal, 0x hex and leading-0 octal are IPv4 number spellings.
+// 0b, 0o and underscores are not, so they must not collapse to 127.0.0.1.
+func TestLooseIPv4Spellings(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"127.0.0.1", "127.0.0.1", true},
+		{"2130706433", "127.0.0.1", true},
+		{"0x7f000001", "127.0.0.1", true},
+		{"0X7F.0.0.1", "127.0.0.1", true},
+		{"0177.0.0.1", "127.0.0.1", true},
+		{"0x7f.0.1", "127.0.0.1", true},
+		{"169.254.43518", "169.254.169.254", true},
+		{"0", "0.0.0.0", true},
+		{"0b1111111.0.0.1", "", false},
+		{"0B1111111.0.0.1", "", false},
+		{"0o177.0.0.1", "", false},
+		{"1_27.0.0.1", "", false},
+		{"127.0.0.0_1", "", false},
+		{"0x", "", false},
+		{"0x.0.0.1", "", false},
+		{"08.0.0.1", "", false},
+		{"+127.0.0.1", "", false},
+		{"-1.0.0.1", "", false},
+		{"256.0.0.1", "", false},
+		{"1.2.3.4.5", "", false},
+		{"4294967296", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := looseIPv4(tc.in)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("looseIPv4(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+	e := newEngine(t, "tools: [WebFetch]\nhosts: [127.0.0.1]\npaths:\n  allow: [\"/work\"]\n")
+	for _, u := range []string{"http://0b1111111.0.0.1/", "http://0o177.0.0.1/", "http://1_27.0.0.1/"} {
+		got, err := e.Decide(context.Background(), policy.Context{}, policy.ToolCall{Name: "WebFetch", Input: []byte(obj("url", u))})
+		if err == nil && got.Verdict == policy.Allow {
+			t.Errorf("%s was allowed as 127.0.0.1", u)
+		}
+	}
+}

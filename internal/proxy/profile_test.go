@@ -1,10 +1,13 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -83,5 +86,62 @@ func TestProfileAuditAndHeader(t *testing.T) {
 	}
 	if !sawProfile {
 		t.Fatal("no audit records")
+	}
+}
+
+// The identity header is the proxy's own: it is removed on every forwarded path
+// (including count_tokens, which is not inspected), with every duplicate value.
+func TestIdentityHeaderStrippedEverywhere(t *testing.T) {
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens"} {
+		t.Run(path, func(t *testing.T) {
+			seen := make(chan []string, 1)
+			up := startUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				seen <- r.Header.Values(headerAgentID)
+				jsonHandler(msgJSON("end_turn", txt))(w, r)
+			})
+			addr := startProxy(t, up, decFunc(byName), nil)
+			conn := dial(t, addr)
+			body := strings.Replace(reqBody, "%t", "false", 1)
+			io.WriteString(conn, "POST "+path+" HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"+
+				headerAgentID+": coder-1\r\n"+headerAgentID+": admin\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n\r\n"+body)
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if got := recv(t, seen); len(got) != 0 {
+				t.Fatalf("identity header reached the upstream: %q", got)
+			}
+		})
+	}
+}
+
+// With two identity headers the proxy uses the first and never the second. The test
+// pins that behaviour so a change is deliberate.
+func TestDuplicateIdentityHeadersUseFirst(t *testing.T) {
+	pol, err := rules.ParsePolicy([]byte(profileYAML), rules.Options{Home: "/home/test", Workdir: "/work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := startUpstream(t, jsonHandler(msgJSON("tool_use", tu("Read", `{"file_path":"/work/a.go"}`))))
+	addr := startProxy(t, up, pol, nil)
+	send := func(first, second string) string {
+		conn := dial(t, addr)
+		body := strings.Replace(reqBody, "%t", "false", 1)
+		io.WriteString(conn, "POST /v1/messages HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"+
+			headerAgentID+": "+first+"\r\n"+headerAgentID+": "+second+"\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n\r\n"+body)
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	if b := send("coder-1", "stranger"); !strings.Contains(b, `"tool_use"`) {
+		t.Fatalf("first value should decide: %s", b)
+	}
+	if b := send("stranger", "coder-1"); !strings.Contains(b, "rule: profile-unknown") {
+		t.Fatalf("a later value must not rescue an unknown first value: %s", b)
 	}
 }

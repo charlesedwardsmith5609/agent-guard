@@ -69,8 +69,8 @@ func looseIPv4(s string) (string, bool) {
 		if p == "" {
 			return "", false
 		}
-		v, err := strconv.ParseUint(p, 0, 33)
-		if err != nil {
+		v, ok := ipv4Part(p)
+		if !ok {
 			return "", false
 		}
 		if i < len(parts)-1 {
@@ -87,6 +87,29 @@ func looseIPv4(s string) (string, bool) {
 	}
 	return strconv.Itoa(int(n>>24&255)) + "." + strconv.Itoa(int(n>>16&255)) + "." +
 		strconv.Itoa(int(n>>8&255)) + "." + strconv.Itoa(int(n&255)), true
+}
+
+// ipv4Part parses one inet_aton number: decimal, 0x or 0X hex, or octal with a leading 0.
+// It accepts no sign, underscore, 0b or 0o prefix, and values of 33 bits or more.
+func ipv4Part(p string) (uint64, bool) {
+	base, digits := 10, p
+	switch {
+	case len(p) > 2 && p[0] == '0' && (p[1] == 'x' || p[1] == 'X'):
+		base, digits = 16, p[2:]
+	case len(p) > 1 && p[0] == '0':
+		base, digits = 8, p[1:]
+	}
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
+		switch {
+		case c >= '0' && c <= '9' && int(c-'0') < base:
+		case base == 16 && (c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'):
+		default:
+			return 0, false
+		}
+	}
+	v, err := strconv.ParseUint(digits, base, 33)
+	return v, err == nil
 }
 
 // cleanAbs cleans an absolute slash path lexically.

@@ -175,6 +175,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pc.AgentID, pc.AgentIDRejected = policy.NormalizeAgentID(r.Header.Get(headerAgentID))
 	}
 
+	// A halted proxy sends nothing upstream. The check repeats per tool call, because a
+	// halt can arrive while the upstream response is in flight.
+	if refuse, _, _ := p.checkHalt(r.Context()); refuse {
+		p.reject(w, rc, http.StatusServiceUnavailable, "agent-guard: halted")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), p.cfg.MaxResponseDuration)
 	defer cancel()
 	resp, err := p.forward(ctx, r, body)
@@ -413,32 +420,39 @@ func (p *Proxy) decide(ctx context.Context, pc policy.Context, tc policy.ToolCal
 	return p.recordDecision(ctx, pc, tc, d, start, stream, kind)
 }
 
-// refuseIfHalted reports whether the halt switch refuses this call. A transition
-// (halt or resume) is written to the audit log first and committed only if that write
-// succeeds. If it fails, the call is blocked and the transition is proposed again by
-// the next decision.
-func (p *Proxy) refuseIfHalted(ctx context.Context, pc policy.Context, d *policy.Decision) bool {
+// checkHalt asks the halt switch whether work must be refused. A transition (halt or
+// resume) is written to the audit log first and committed only if that write
+// succeeds. If it fails, the work is refused (rule fail-closed:audit) and the switch
+// proposes the transition again on the next check.
+func (p *Proxy) checkHalt(ctx context.Context) (refuse bool, rule, why string) {
 	if p.cfg.Halt == nil {
-		return false
+		return false, "", ""
 	}
 	r := p.cfg.Halt.Check()
 	if r.Transition != "" {
 		if err := p.recordControl(ctx, r.Transition, r.Reason); err != nil {
 			p.cfg.Halt.Abort(r)
 			p.log.Error("halt audit failed", "err", err)
-			*d = failClosed("fail-closed:audit", "halt control could not be recorded")
-			return true
+			return true, "fail-closed:audit", "halt control could not be recorded"
 		}
 		if !p.cfg.Halt.Commit(r) {
-			*d = failClosed("halt", "halt state changed while recording; failing closed")
-			return true
+			return true, "halt", "halt state changed while recording; failing closed"
 		}
 		p.log.Info("halt control", "event", r.Transition)
 	}
-	if !r.Halted {
+	if r.Halted {
+		return true, "halt", r.Reason
+	}
+	return false, "", ""
+}
+
+// refuseIfHalted reports whether the halt switch refuses this tool call, and fills d.
+func (p *Proxy) refuseIfHalted(ctx context.Context, pc policy.Context, d *policy.Decision) bool {
+	refuse, rule, why := p.checkHalt(ctx)
+	if !refuse {
 		return false
 	}
-	*d = failClosed("halt", r.Reason)
+	*d = failClosed(rule, why)
 	if pr, ok := p.cfg.Decider.(interface{ ProfileFor(string) string }); ok {
 		d.Profile = pr.ProfileFor(pc.AgentID)
 	}

@@ -277,7 +277,7 @@ Find the call in the audit log (`jq 'select(.decision != "ALLOW")' audit.jsonl`)
 | `host-not-allowed` | A host in the call is not in `hosts` and you did not mention it | Add the host, or name it in your message. Check `reason`: it might be a file name read as a host |
 | `path-out-of-scope` | A path argument is outside `paths.allow` | Add the directory, or fix `workdir` if a relative path resolved somewhere unexpected |
 | `sensitive:<class>` | The call touches a sensitive location | Expected. ASK needs your say-so; set the class to `block` to refuse outright |
-| `halt` | The halt file is halted, missing, or corrupt. The call was refused before the other rules ran | Write `running` to the halt file. See [operations](operations.md#halt) |
+| `halt` | The halt file is halted, missing, or corrupt, and the halt arrived while the model was answering. (A request that arrives while halted gets HTTP 503 and has no rule.) The call was refused before the other rules ran | Write `running` to the halt file. See [operations](operations.md#halt) |
 | `profile-missing` | `profiles` is set and the request has no agent identity | Send `X-Agent-Guard-Identity`. See [profiles](#profiles-and-agents) |
 | `profile-unknown` | The identity is not in `agents`, or it is not a usable token | Map the identity to a profile that exists |
 | `fail-closed:error` | The decision itself failed (unparseable input, input too large, a limit) | The audit `reason` and the proxy's stderr log say what failed |

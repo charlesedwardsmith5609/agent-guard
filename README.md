@@ -110,9 +110,11 @@ deny-on-timeout flow that is not built, is in [docs/ask-verdict.md](docs/ask-ver
   same message, so the model sees it on its next step. In testing it reported the block accurately
   and did not try to work around it.
 
-**Halt.** `-halt-file` is a text file the proxy reads at the start of every tool-call decision.
-One mutex owns that state. There is no poll loop. `running` lets the policy run. `halted`, a
-missing file, or anything the proxy cannot parse refuses every tool call. The worst-case time
+**Halt.** `-halt-file` is a text file the proxy reads when a request arrives and at the start of every
+tool-call decision. One mutex owns that state. There is no poll loop. `running` lets the policy
+run. `halted`, a missing file, or anything the proxy cannot parse stops new requests before they
+reach the upstream (HTTP 503) and refuses any tool call already in flight. Update the file with
+write-temp-then-rename, not `echo >`. The worst-case time
 from a completed write of that file to the first blocked call is the wait until the next
 decision starts, plus one file read. A decision already inside the rules engine is not
 interrupted. Halt, resume, and each refusal are audit lines. Details are in
