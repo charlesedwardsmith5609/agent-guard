@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -577,19 +578,42 @@ func TestConcurrentObserveLosesNothing(t *testing.T) {
 // Observe racing Close must either record or return an error, never panic.
 func TestObserveRacingClose(t *testing.T) {
 	for i := 0; i < 50; i++ {
-		l := NewWriter(&lockedBuf{}, Options{QueueSize: 16})
+		buf := &lockedBuf{}
+		l := NewWriter(buf, Options{QueueSize: 16})
 		var wg sync.WaitGroup
+		var accepted atomic.Int64
+		first := make(chan struct{}, 4) // each writer signals after its first Observe returns
 		for g := 0; g < 4; g++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for j := 0; j < 20; j++ {
-					l.Observe(context.Background(), ev("T", "1", `{}`, policy.Allow, "allow", ""))
+					if j == 1 {
+						first <- struct{}{}
+					}
+					switch err := l.Observe(context.Background(), ev("T", "1", `{}`, policy.Allow, "allow", "")); {
+					case err == nil:
+						accepted.Add(1)
+					case errors.Is(err, errClosed), errors.Is(err, errFull):
+					default:
+						t.Errorf("Observe returned unexpected error: %v", err)
+					}
 				}
 			}()
 		}
+		<-first // at least one Observe has completed before Close races the rest
 		closeOK(t, l)
 		wg.Wait()
+		if accepted.Load() == 0 {
+			t.Fatalf("iteration %d: no Observe call succeeded", i)
+		}
+		// Every Observe that reported success was written, and nothing else was.
+		if got, want := int64(strings.Count(buf.String(), "\n")), accepted.Load(); got != want {
+			t.Fatalf("iteration %d: %d records written, %d Observe calls succeeded", i, got, want)
+		}
+		if err := l.Observe(context.Background(), ev("T", "1", `{}`, policy.Allow, "allow", "")); !errors.Is(err, errClosed) {
+			t.Fatalf("Observe after Close = %v, want errClosed", err)
+		}
 	}
 }
 

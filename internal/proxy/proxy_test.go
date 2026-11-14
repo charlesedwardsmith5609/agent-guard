@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -324,19 +326,26 @@ func TestJSONWriteDeadline(t *testing.T) {
 
 func TestClientDisconnectCancelsUpstream(t *testing.T) {
 	started := make(chan struct{})
-	cancelled := make(chan struct{})
+	cancelled := make(chan error, 1)
 	up := startUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body) // net/http only watches for disconnect after the body is read
 		close(started)
 		<-r.Context().Done()
-		close(cancelled)
+		cancelled <- r.Context().Err()
 	})
 	addr := startProxy(t, up, decFunc(byName), nil)
 	conn := dial(t, addr)
 	sendRequest(t, conn, "POST", "/v1/messages", nil, strings.Replace(reqBody, "%t", "false", 1))
 	recv(t, started)
 	conn.Close()
-	recv(t, cancelled)
+	select {
+	case err := <-cancelled:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("upstream request context ended with %v, want context.Canceled", err)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("upstream request was not cancelled after the client disconnected")
+	}
 }
 
 func TestNewValidation(t *testing.T) {
