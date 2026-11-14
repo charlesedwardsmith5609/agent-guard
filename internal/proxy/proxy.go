@@ -414,25 +414,31 @@ func (p *Proxy) decide(ctx context.Context, pc policy.Context, tc policy.ToolCal
 }
 
 // refuseIfHalted reports whether the halt switch refuses this call. A transition
-// (halt or resume) is written to the audit log first. If that write fails, the
-// call is blocked: a change of halt state that was not recorded does not proceed.
+// (halt or resume) is written to the audit log first and committed only if that write
+// succeeds. If it fails, the call is blocked and the transition is proposed again by
+// the next decision.
 func (p *Proxy) refuseIfHalted(ctx context.Context, pc policy.Context, d *policy.Decision) bool {
 	if p.cfg.Halt == nil {
 		return false
 	}
-	halted, trans, why := p.cfg.Halt.Read()
-	if trans != "" {
-		if err := p.recordControl(ctx, trans, why); err != nil {
+	r := p.cfg.Halt.Check()
+	if r.Transition != "" {
+		if err := p.recordControl(ctx, r.Transition, r.Reason); err != nil {
+			p.cfg.Halt.Abort(r)
 			p.log.Error("halt audit failed", "err", err)
 			*d = failClosed("fail-closed:audit", "halt control could not be recorded")
 			return true
 		}
-		p.log.Info("halt control", "event", trans)
+		if !p.cfg.Halt.Commit(r) {
+			*d = failClosed("halt", "halt state changed while recording; failing closed")
+			return true
+		}
+		p.log.Info("halt control", "event", r.Transition)
 	}
-	if !halted {
+	if !r.Halted {
 		return false
 	}
-	*d = failClosed("halt", why)
+	*d = failClosed("halt", r.Reason)
 	if pr, ok := p.cfg.Decider.(interface{ ProfileFor(string) string }); ok {
 		d.Profile = pr.ProfileFor(pc.AgentID)
 	}

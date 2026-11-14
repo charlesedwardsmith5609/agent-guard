@@ -107,15 +107,17 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 	var haltSwitch *halt.Switch
 	if o.haltFile != "" {
 		haltSwitch = halt.New(o.haltFile)
-		halted, trans, why := haltSwitch.Read()
-		if trans != "" {
+		r := haltSwitch.Check()
+		if r.Transition != "" {
 			cctx, cancel := context.WithTimeout(context.Background(), o.decideTimeout)
-			err := auditLog.RecordControl(cctx, trans, why)
+			err := auditLog.RecordControl(cctx, r.Transition, r.Reason)
 			cancel()
 			if err != nil {
+				haltSwitch.Abort(r)
 				return fail(err)
 			}
-			log.Info("halt control", "event", trans, "halted", halted)
+			haltSwitch.Commit(r)
+			log.Info("halt control", "event", r.Transition, "halted", r.Halted)
 		}
 	}
 	cfg := proxy.Config{

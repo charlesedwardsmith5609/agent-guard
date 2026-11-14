@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -132,5 +133,85 @@ func TestHaltRaceDuringTraffic(t *testing.T) {
 	blocked := doRaw(t, addr, "POST", "/v1/messages", nil, body)
 	if !strings.Contains(blocked.body, "rule: halt") || strings.Contains(blocked.body, "KEEP") {
 		t.Fatalf("after the race, a halted file must block the next call: %s", blocked.body)
+	}
+}
+
+func writeControl(t *testing.T, path, text string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func countKind(obs *recObs, kind string) int {
+	n := 0
+	for _, e := range obs.snapshot() {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// A resume whose audit record failed must not take effect: the next calls stay
+// blocked until a record is written, and only then does the proxy resume.
+func TestResumeNeedsItsAuditRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "halt")
+	writeControl(t, path, "halted\n")
+	up := startUpstream(t, jsonHandler(msgJSON("tool_use", tu("ok_tool", `{"a":"KEEP"}`))))
+	addr, obs := startProxyObs(t, up, decFunc(byName), func(c *Config) { c.Halt = halt.New(path) })
+	body := strings.Replace(reqBody, "%t", "false", 1)
+	call := func() string { return doRaw(t, addr, "POST", "/v1/messages", nil, body).body }
+
+	if b := call(); !strings.Contains(b, "rule: halt") {
+		t.Fatalf("halted: %s", b)
+	}
+	writeControl(t, path, "running\n")
+	obs.setErr(errors.New("disk full"))
+	for i := 0; i < 2; i++ {
+		b := call()
+		if !strings.Contains(b, "fail-closed:audit") || strings.Contains(b, "KEEP") {
+			t.Fatalf("call %d with a failed resume record must be blocked: %s", i, b)
+		}
+	}
+	if n := countKind(obs, "resume"); n != 2 {
+		t.Fatalf("each call should retry the resume record, got %d attempts", n)
+	}
+	obs.setErr(nil)
+	if b := call(); !strings.Contains(b, "KEEP") {
+		t.Fatalf("resume should take effect once recorded: %s", b)
+	}
+	if b := call(); !strings.Contains(b, "KEEP") {
+		t.Fatalf("still running: %s", b)
+	}
+	if n := countKind(obs, "resume"); n != 3 {
+		t.Fatalf("resume records = %d, want 3 (two failed, one written)", n)
+	}
+}
+
+// A halt whose record failed still refuses the call (fail-closed:audit), and the
+// halt is recorded on a later call.
+func TestHaltRecordFailureFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "halt")
+	writeControl(t, path, "running\n")
+	up := startUpstream(t, jsonHandler(msgJSON("tool_use", tu("ok_tool", `{"a":"KEEP"}`))))
+	addr, obs := startProxyObs(t, up, decFunc(byName), func(c *Config) { c.Halt = halt.New(path) })
+	body := strings.Replace(reqBody, "%t", "false", 1)
+	call := func() string { return doRaw(t, addr, "POST", "/v1/messages", nil, body).body }
+
+	if b := call(); !strings.Contains(b, "KEEP") {
+		t.Fatalf("running: %s", b)
+	}
+	writeControl(t, path, "halted\n")
+	obs.setErr(errors.New("disk full"))
+	if b := call(); !strings.Contains(b, "fail-closed:audit") || strings.Contains(b, "KEEP") {
+		t.Fatalf("failed halt record must refuse: %s", b)
+	}
+	obs.setErr(nil)
+	if b := call(); !strings.Contains(b, "rule: halt") || strings.Contains(b, "KEEP") {
+		t.Fatalf("halted: %s", b)
+	}
+	if n := countKind(obs, "halt"); n != 2 {
+		t.Fatalf("halt records = %d, want 2 (one failed, one written)", n)
 	}
 }
