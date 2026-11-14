@@ -133,6 +133,7 @@ write fails or does not finish within the decision timeout, the call is blocked
 | [docs/operations.md](docs/operations.md) | Flags, fixed limits, HTTP behaviour, streaming, the audit log format and recipes, OpenTelemetry, shutdown, troubleshooting |
 | [docs/development.md](docs/development.md) | Building, testing, repository layout, conventions |
 | [docs/ask-verdict.md](docs/ask-verdict.md) | What Ask does today, the gaps, and a proposed deny-on-timeout for unattended runs |
+| [docs/running-many-agents.md](docs/running-many-agents.md) | One proxy per agent, or one shared proxy with profiles: audit correlation and halt scope |
 | [SECURITY.md](SECURITY.md) | Scope and how to report a vulnerability |
 | [examples/policy.yaml](examples/policy.yaml) | A commented starting policy (tested to load) |
 | [REQUIREMENTS.md](REQUIREMENTS.md), [plans/](plans/) | Requirements, design decisions and the design history |

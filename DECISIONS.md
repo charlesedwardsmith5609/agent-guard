@@ -54,3 +54,16 @@ Choice: Option 2, in `docs/ask-verdict.md`. The proposal reuses Ask, denies when
 
 Why: A second verdict would overlap Ask. Building an approver needs a channel the model cannot write to, which is a product decision, not something to invent in this pass. Deny on timeout is the fail-closed default for a run with nobody watching.
 
+## 2026-11-13 Many agents stay a deployment choice
+
+Context: The proxy is one process with one halt switch. Profiles, added in this branch, can differ per identity. Spans do not carry the agent id.
+
+Options:
+
+1. Document one process per agent versus one shared process with profiles, including what a halt covers and which audit fields correlate.
+2. Build a supervisor that launches and halts many proxies.
+
+Choice: Option 1, in `docs/running-many-agents.md`. Halt scope is the process that holds the switch. Correlation for a shared proxy is the `agent` and `profile` audit fields. Spans are not described as carrying those fields, because they do not.
+
+Why: A supervisor would be a new service. The two layouts already fall out of the flags that exist. Docs only.
+
