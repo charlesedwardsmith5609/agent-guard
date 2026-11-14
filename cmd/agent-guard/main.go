@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"agent-guard/internal/audit"
+	"agent-guard/internal/halt"
 	"agent-guard/internal/proxy"
 	"agent-guard/internal/rules"
 	"agent-guard/internal/telemetry"
@@ -34,6 +35,7 @@ type options struct {
 	maxResponse     time.Duration
 	maxInflight     int
 	maxConns        int
+	haltFile        string
 }
 
 func parseOptions(args []string, out io.Writer) (options, error) {
@@ -51,6 +53,7 @@ func parseOptions(args []string, out io.Writer) (options, error) {
 	fs.DurationVar(&o.maxResponse, "max-response", 10*time.Minute, "absolute limit on one upstream exchange")
 	fs.IntVar(&o.maxInflight, "max-inflight", 64, "concurrent requests before answering 503")
 	fs.IntVar(&o.maxConns, "max-conns", 256, "concurrent accepted connections")
+	fs.StringVar(&o.haltFile, "halt-file", "", "halt control file (running/halted); unreadable or corrupt refuses every tool call")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -101,11 +104,26 @@ func newServer(o options, log *slog.Logger, spans io.Writer) (*http.Server, net.
 		shutdown(context.Background())
 		return nil, nil, nil, err
 	}
+	var haltSwitch *halt.Switch
+	if o.haltFile != "" {
+		haltSwitch = halt.New(o.haltFile)
+		halted, trans, why := haltSwitch.Read()
+		if trans != "" {
+			cctx, cancel := context.WithTimeout(context.Background(), o.decideTimeout)
+			err := auditLog.RecordControl(cctx, trans, why)
+			cancel()
+			if err != nil {
+				return fail(err)
+			}
+			log.Info("halt control", "event", trans, "halted", halted)
+		}
+	}
 	cfg := proxy.Config{
 		Upstream:            u,
 		Decider:             engine,
 		Audit:               auditLog,
 		Logger:              log,
+		Halt:                haltSwitch,
 		DecideTimeout:       o.decideTimeout,
 		UpstreamTimeout:     o.upstreamTimeout,
 		MaxResponseDuration: o.maxResponse,

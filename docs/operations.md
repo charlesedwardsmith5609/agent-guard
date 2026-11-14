@@ -35,6 +35,7 @@ that**, and there is no authentication.
 | `-max-response` | `10m` | Absolute time limit for one upstream exchange, however much data keeps arriving |
 | `-decide-timeout` | `5s` | Time allowed for one decision, including waiting for its audit write |
 | `-upstream-timeout` | `30s` | Time to wait for the upstream's response headers |
+| `-halt-file` | *unset* | Path of the halt control file. Omit it and the proxy does not halt. See [Halt](#halt) |
 
 Flag values that are not positive, an unknown `-otel` value or a missing required flag print an
 error and exit with status 2.
@@ -99,6 +100,23 @@ name differs from its `type`, a tool call that carries arguments in its start ev
 event, a stream that ends before `message_stop`, or a stream that goes silent), the held data is
 dropped and the stream ends with an SSE `error` event of type `api_error` and the message
 `agent-guard: response rejected (fail closed)`.
+
+## Halt
+
+`-halt-file` points at a small text file. The proxy reads it under one mutex at the start of every tool-call decision. There is no background poll. One `Switch` owns the state; the rest of the proxy does not keep a halt flag.
+
+| File contents (trimmed, case-insensitive) | Effect |
+|-------------------------------------------|--------|
+| `running`, `run`, or `0` | Tool calls are judged as usual |
+| `halted`, `halt`, or `1` | Every tool call is replaced with a block notice (`rule: halt`) |
+| anything else, including an empty file | Treated as halted (corrupt) |
+| missing file, symlink, directory, or a file larger than 64 bytes | Treated as halted (unreadable or corrupt) |
+
+A change is noticed by the next decision that starts after the write. A decision that has already entered the rules engine is not interrupted. The worst-case time from a completed write of the control file to the first blocked call is therefore the time until the next tool-call decision starts, plus one file read. That wait is not a poll interval.
+
+Each transition (`halt` or `resume`) is one audit line (`"event":"halt"` or `"event":"resume"`, `"decision":"HALT"` or `"RESUME"`). Each refused call is its own line (`"event":"refusal"`, `"decision":"BLOCK"`, `"rule":"halt"`). The first time a process reads a halted or unreadable file, that read is recorded as `halt`. Starting already running does not write a line.
+
+If the transition cannot be written to the audit log, the call is blocked (`fail-closed:audit`).
 
 ## Audit log
 

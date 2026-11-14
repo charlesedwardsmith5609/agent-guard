@@ -88,6 +88,28 @@ func closeOK(t *testing.T, l *Logger) {
 	}
 }
 
+func TestRecordControl(t *testing.T) {
+	buf := &lockedBuf{}
+	l := NewWriter(buf, Options{})
+	if err := l.RecordControl(context.Background(), "halt", "halt control is halted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RecordControl(context.Background(), "resume", "halt control is running"); err != nil {
+		t.Fatal(err)
+	}
+	closeOK(t, l)
+	recs := lines(t, buf.String())
+	if len(recs) != 2 {
+		t.Fatalf("got %d lines", len(recs))
+	}
+	if recs[0]["event"] != "halt" || recs[0]["decision"] != "HALT" || recs[0]["rule"] != "halt" {
+		t.Errorf("halt record = %v", recs[0])
+	}
+	if recs[1]["event"] != "resume" || recs[1]["decision"] != "RESUME" {
+		t.Errorf("resume record = %v", recs[1])
+	}
+}
+
 func TestRecordShape(t *testing.T) {
 	buf := &lockedBuf{}
 	l := NewWriter(buf, Options{})

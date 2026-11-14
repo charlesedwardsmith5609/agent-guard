@@ -223,6 +223,7 @@ Find the call in the audit log (`jq 'select(.decision != "ALLOW")' audit.jsonl`)
 | `host-not-allowed` | A host in the call is not in `hosts` and you did not mention it | Add the host, or name it in your message. Check `reason`: it might be a file name read as a host |
 | `path-out-of-scope` | A path argument is outside `paths.allow` | Add the directory, or fix `workdir` if a relative path resolved somewhere unexpected |
 | `sensitive:<class>` | The call touches a sensitive location | Expected. ASK needs your say-so; set the class to `block` to refuse outright |
+| `halt` | The halt file is halted, missing, or corrupt. The call was refused before the other rules ran | Write `running` to the halt file. See [operations](operations.md#halt) |
 | `fail-closed:error` | The decision itself failed (unparseable input, input too large, a limit) | The audit `reason` and the proxy's stderr log say what failed |
 | `fail-closed:timeout` | The decision took longer than `-decide-timeout` | Usually a stuck or very slow policy evaluation |
 | `fail-closed:overloaded` | Too many decisions were running at once | Retry |

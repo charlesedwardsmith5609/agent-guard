@@ -107,6 +107,14 @@ There is no out-of-band approval channel.
   same message, so the model sees it on its next step. In testing it reported the block accurately
   and did not try to work around it.
 
+**Halt.** `-halt-file` is a text file the proxy reads at the start of every tool-call decision.
+One mutex owns that state. There is no poll loop. `running` lets the policy run. `halted`, a
+missing file, or anything the proxy cannot parse refuses every tool call. The worst-case time
+from a completed write of that file to the first blocked call is the wait until the next
+decision starts, plus one file read. A decision already inside the rules engine is not
+interrupted. Halt, resume, and each refusal are audit lines. Details are in
+[docs/operations.md](docs/operations.md#halt).
+
 **Fail closed.** Anything unexpected blocks the call: a policy error, tool input that cannot be
 parsed, a decision that takes too long, a malformed or oversized upstream response, an SSE event
 whose name disagrees with its payload, too many tool calls in one response, or a failure to write
@@ -186,11 +194,13 @@ internal/rules        YAML policy engine (immutable after load; safe for concurr
 internal/audit        JSONL writer: one writer goroutine owns the file
 internal/telemetry    one OpenTelemetry span per decision
 internal/policy       shared types: Verdict, Decision, Decider, Observer
+internal/halt         halt-file switch; one mutex owns the state
 ```
 
 Shared state has exactly one owner. The policy engine is immutable; the audit file belongs to one
-writer goroutine fed by a bounded channel; the in-flight and connection caps are channel
-semaphores; per-request parsing state belongs to that request's goroutine.
+writer goroutine fed by a bounded channel; the halt switch is one mutex; the in-flight and
+connection caps are channel semaphores; per-request parsing state belongs to that request's
+goroutine.
 
 ## License
 

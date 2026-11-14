@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"agent-guard/internal/halt"
 	"agent-guard/internal/policy"
 )
 
@@ -25,7 +26,11 @@ type Config struct {
 
 	// Audit records every decision before the proxy acts on it. It is required: a proxy that
 	// cannot be audited does not start, and a failing Audit turns ALLOW into BLOCK.
+	// Halt transitions are recorded only when Audit also implements RecordControl.
 	Audit policy.Observer
+	// Halt, when set, is read at the start of every decision. A halted switch
+	// refuses the call before the policy runs.
+	Halt *halt.Switch
 	// Telemetry receives each final decision (optional). Its errors are logged, never fatal.
 	Telemetry policy.Observer
 
@@ -391,12 +396,62 @@ func (b *idleBody) Close() error {
 func (p *Proxy) decide(ctx context.Context, pc policy.Context, tc policy.ToolCall, stream, overLimit bool) policy.Decision {
 	start := time.Now()
 	var d policy.Decision
-	if overLimit {
+	kind := ""
+	switch {
+	case p.refuseIfHalted(ctx, pc, &d):
+		kind = "refusal"
+	case overLimit:
 		d = failClosed("fail-closed:too-many-calls", "tool call limit exceeded")
-	} else {
+	default:
 		d = p.guard.decide(ctx, pc, tc)
 	}
-	ev := policy.Event{Call: tc, Decision: d, Start: start, End: time.Now(), Stream: stream}
+	return p.recordDecision(ctx, pc, tc, d, start, stream, kind)
+}
+
+// refuseIfHalted reports whether the halt switch refuses this call. A transition
+// (halt or resume) is written to the audit log first. If that write fails, the
+// call is blocked: a change of halt state that was not recorded does not proceed.
+func (p *Proxy) refuseIfHalted(ctx context.Context, pc policy.Context, d *policy.Decision) bool {
+	if p.cfg.Halt == nil {
+		return false
+	}
+	halted, trans, why := p.cfg.Halt.Read()
+	if trans != "" {
+		if err := p.recordControl(ctx, trans, why); err != nil {
+			p.log.Error("halt audit failed", "err", err)
+			*d = failClosed("fail-closed:audit", "halt control could not be recorded")
+			return true
+		}
+		p.log.Info("halt control", "event", trans)
+	}
+	if !halted {
+		return false
+	}
+	*d = failClosed("halt", why)
+	if pr, ok := p.cfg.Decider.(interface{ ProfileFor(string) string }); ok {
+		d.Profile = pr.ProfileFor(pc.AgentID)
+	}
+	return true
+}
+
+func (p *Proxy) recordControl(ctx context.Context, kind, reason string) error {
+	type recorder interface {
+		RecordControl(context.Context, string, string) error
+	}
+	r, ok := p.cfg.Audit.(recorder)
+	if !ok {
+		return errors.New("proxy: audit observer cannot record halt events")
+	}
+	octx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.cfg.DecideTimeout)
+	defer cancel()
+	return r.RecordControl(octx, kind, reason)
+}
+
+func (p *Proxy) recordDecision(ctx context.Context, pc policy.Context, tc policy.ToolCall, d policy.Decision, start time.Time, stream bool, kind string) policy.Decision {
+	ev := policy.Event{Call: tc, Decision: d, Start: start, End: time.Now(), Stream: stream, Kind: kind}
+	if !pc.AgentIDRejected {
+		ev.Agent = pc.AgentID
+	}
 
 	// Record even if the client has gone: detach from request cancellation, but stay bounded.
 	octx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.cfg.DecideTimeout)

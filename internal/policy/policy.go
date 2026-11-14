@@ -29,6 +29,12 @@ type ToolCall struct {
 type Context struct {
 	// UserText is user-role text from the whole conversation. Tool results are excluded.
 	UserText []string
+	// AgentID is the identity from the request, after trimming. Empty when the
+	// caller did not send one.
+	AgentID string
+	// AgentIDRejected is set when the identity was present but not usable
+	// (for example longer than the limit). It must not be treated as a known agent.
+	AgentIDRejected bool
 }
 
 // Decision is a verdict plus the rule that produced it.
@@ -36,6 +42,9 @@ type Decision struct {
 	Verdict Verdict
 	Rule    string
 	Reason  string
+	// Profile is the named policy profile that produced the verdict.
+	// It is empty when no profile applied.
+	Profile string
 }
 
 // Decider evaluates tool calls. Implementations must be safe for concurrent use, own any state
