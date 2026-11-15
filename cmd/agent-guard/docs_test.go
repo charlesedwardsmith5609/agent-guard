@@ -92,7 +92,7 @@ func TestPolicyExamplesInDocsLoad(t *testing.T) {
 			if !strings.Contains(b, "tools:") {
 				continue
 			}
-			if _, err := rules.Parse([]byte(b), rules.Options{Home: "/home/test", Workdir: "/work"}); err != nil {
+			if _, err := rules.ParsePolicy([]byte(b), rules.Options{Home: "/home/test", Workdir: "/work"}); err != nil {
 				t.Errorf("%s: policy example %d does not load: %v\n%s", doc, i+1, err, b)
 			}
 			checked++

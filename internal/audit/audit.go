@@ -36,6 +36,15 @@ type Record struct {
 	ArgsPreview string    `json:"args_preview,omitempty"`
 	LatencyMS   float64   `json:"latency_ms"`
 	Stream      bool      `json:"stream"`
+	// Profile is the policy profile that applied. Empty when the call was
+	// refused before a profile could be selected.
+	Profile string `json:"profile"`
+	// Agent is the redacted agent identity, when the request carried one.
+	Agent string `json:"agent,omitempty"`
+	// Event is set for halt-control lines ("halt", "resume") and for a tool
+	// call refused because the proxy is halted ("refusal"). Ordinary decisions
+	// omit it.
+	Event string `json:"event,omitempty"`
 }
 
 // RedactID makes an untrusted identifier (tool name, tool_use id) safe to record or export:
@@ -157,10 +166,37 @@ func newLogger(w io.Writer, opt Options) *Logger {
 // context is an error. The wait is bounded by ctx, so a stuck disk delays a decision by at most
 // the caller's timeout and then fails closed.
 func (l *Logger) Observe(ctx context.Context, e policy.Event) error {
+	return l.enqueue(ctx, l.record(e))
+}
+
+// RecordControl writes a halt or resume line. It is not a tool-call decision.
+// kind must be "halt" or "resume".
+func (l *Logger) RecordControl(ctx context.Context, kind, reason string) error {
+	decision, rule := "HALT", "halt"
+	if kind == "resume" {
+		decision, rule = "RESUME", "resume"
+	} else if kind != "halt" {
+		return errors.New("audit: control event must be halt or resume")
+	}
+	sum := sha256.Sum256(nil)
+	rec := Record{
+		Time:       time.Now().UTC(),
+		Event:      kind,
+		Tool:       "halt-control",
+		ToolUseID:  "-",
+		Decision:   decision,
+		Rule:       rule,
+		Reason:     truncate(redactWithCanaries(reason, l.opt.Canaries), reasonMax),
+		ArgsSHA256: hex.EncodeToString(sum[:]),
+	}
+	return l.enqueue(ctx, rec)
+}
+
+func (l *Logger) enqueue(ctx context.Context, rec Record) error {
 	if l.failed.Load() {
 		return errFailed
 	}
-	it := &item{rec: l.record(e), ack: make(chan error, 1)}
+	it := &item{rec: rec, ack: make(chan error, 1)}
 	l.mu.RLock()
 	if l.closed {
 		l.mu.RUnlock()
@@ -204,6 +240,11 @@ func (l *Logger) record(e policy.Event) Record {
 		ArgsSHA256: hex.EncodeToString(sum[:]),
 		LatencyMS:  float64(e.End.Sub(e.Start)) / float64(time.Millisecond),
 		Stream:     e.Stream,
+		Profile:    e.Decision.Profile,
+		Event:      e.Kind,
+	}
+	if e.Agent != "" {
+		r.Agent = RedactID(e.Agent)
 	}
 	if !l.opt.NoPreview {
 		r.ArgsPreview = preview(e.Call.Input, previewMax, l.opt.Canaries)

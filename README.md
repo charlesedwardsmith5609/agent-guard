@@ -24,8 +24,9 @@ SDK and the stdout exporter), plus their transitive modules. MIT licensed.
 Pre-1.0. The behaviour described here is covered by automated tests that run the real code over
 real loopback sockets against fake upstreams, including the documented Anthropic streaming event
 format. It has also been run against the **live Anthropic API** with a small model, streaming and
-non-streaming (`scripts/live-test.sh`, 17 checks), and with a **real Claude Code session**
-(`scripts/live-claude-test.sh`, 7 checks, Claude Code 2.1.319): allowed, asked and blocked calls,
+non-streaming (`scripts/live-test.sh`, 17 checks when last run), and with a **real Claude Code session**
+(`scripts/live-claude-test.sh`, 7 checks, Claude Code 2.1.319). Those scripts spend API credit, are
+not part of `scripts/check.sh`, and were not re-run for this documentation pass: allowed, asked and blocked calls,
 a response mixing allowed and blocked calls, and the API key staying out of the logs.
 
 That is still narrow: one small model, Claude Code in headless mode (`-p`) with only the `Read` and
@@ -39,7 +40,13 @@ sub-agents, MCP), extended thinking and long sessions have not been tried, so ex
 - **Not supported:** Codex and any OpenAI-style agent (chat completions or responses APIs). They
   use a different protocol that is not implemented, so they are not protected.
 - Policy in YAML: allowed tools, allowed hosts, path scopes, and how to treat sensitive
-  locations (see [docs/policy.md](docs/policy.md)).
+  locations (see [docs/policy.md](docs/policy.md)). Optional named profiles, selected by the
+  `X-Agent-Guard-Identity` header. Without that map every caller shares one policy. With it, a
+  missing, unknown or repeated identity is denied (a request that carries the header more than
+  once is treated as an unusable identity, `profile-unknown`). The identity is a label, not
+  authentication: see
+  [profiles](docs/policy.md#profiles-and-agents) and
+  [running many agents](docs/running-many-agents.md).
 
 ## Quick start
 
@@ -97,7 +104,8 @@ replaced, a `stop_reason` of `tool_use` becomes `end_turn`, so the harness does 
 results that will never come.
 
 **ASK is a notice, not an approval flow.** The call is not executed and nothing waits for you.
-There is no out-of-band approval channel.
+There is no out-of-band approval channel. What that means for an unattended run, and a proposed
+deny-on-timeout flow that is not built, is in [docs/ask-verdict.md](docs/ask-verdict.md).
 
 **What happens next depends on the rest of the response** (observed with Claude Code):
 
@@ -107,12 +115,36 @@ There is no out-of-band approval channel.
   same message, so the model sees it on its next step. In testing it reported the block accurately
   and did not try to work around it.
 
+**Halt.** `-halt-file` is a text file the proxy reads when a request arrives and at the start of every
+tool-call decision. One mutex owns that state. There is no poll loop. `running` lets the policy
+run. `halted`, a missing file, or anything the proxy cannot parse stops new requests before they
+reach the upstream (HTTP 503) and refuses any tool call already in flight. Update the file with
+write-temp-then-rename, not `echo >`. Keep the file on a local filesystem: a read
+that does not finish within 2 seconds (for example on a stalled NFS or FUSE mount) is treated as
+unreadable and halts (fail closed), and while such a read is stuck every check is refused at once
+without starting another read. On a platform without the needed `open` flags (not Unix) the file
+is never read and the proxy stays halted. The worst-case time
+from a completed write of that file to the first blocked call is the wait until the next
+decision starts, plus one file read. A decision already inside the rules engine is not
+interrupted. Halt, resume, and each refusal are audit lines. Details are in
+[docs/operations.md](docs/operations.md#halt).
+
 **Fail closed.** Anything unexpected blocks the call: a policy error, tool input that cannot be
 parsed, a decision that takes too long, a malformed or oversized upstream response, an SSE event
 whose name disagrees with its payload, too many tool calls in one response, or a failure to write
 the audit record. An ALLOW is released only after its audit record has been *written*; if the
 write fails or does not finish within the decision timeout, the call is blocked
 (`fail-closed:audit`).
+
+## Checks and review scripts
+
+Run `bash scripts/check.sh` after any change. It runs two helper checks (`scripts/misbehavior-check.sh`,
+`scripts/assertion-check.sh`; they warn, and fail under `PAIRING_STRICT=1`), then `gofmt`, `go vet`,
+`govulncheck` and `go test -race -count=1 ./...`, and prints `CHECK PASSED` or `CHECK FAILED`. The
+repository also holds the scripts used to review it: `scripts/plan-review.sh` and
+`scripts/cross-review.sh` send a plan or a diff to a second AI provider you configure, and
+`scripts/live-test.sh` and `scripts/live-claude-test.sh` run against the real API. See
+[docs/development.md](docs/development.md).
 
 ## Documentation
 
@@ -121,9 +153,12 @@ write fails or does not finish within the decision timeout, the call is blocked
 | [docs/policy.md](docs/policy.md) | Every policy key, exactly how hosts, paths and sensitive locations are detected and matched, and how to answer "why was this blocked?" |
 | [docs/operations.md](docs/operations.md) | Flags, fixed limits, HTTP behaviour, streaming, the audit log format and recipes, OpenTelemetry, shutdown, troubleshooting |
 | [docs/development.md](docs/development.md) | Building, testing, repository layout, conventions |
+| [docs/ask-verdict.md](docs/ask-verdict.md) | What Ask does today, the gaps, and a proposed deny-on-timeout for unattended runs |
+| [docs/running-many-agents.md](docs/running-many-agents.md) | One proxy per agent, or one shared proxy with profiles: audit correlation and halt scope |
+| [CHANGELOG.md](CHANGELOG.md) | User-visible changes |
 | [SECURITY.md](SECURITY.md) | Scope and how to report a vulnerability |
 | [examples/policy.yaml](examples/policy.yaml) | A commented starting policy (tested to load) |
-| [REQUIREMENTS.md](REQUIREMENTS.md), [plans/](plans/) | Requirements, design decisions and the design history |
+| [REQUIREMENTS.md](REQUIREMENTS.md), [DECISIONS.md](DECISIONS.md), [plans/](plans/) | Requirements, design decisions and the design history |
 
 ## Threat model
 
@@ -144,7 +179,9 @@ and the usual credential locations.
    (`server_tool_use`), MCP servers acting on their own, the harness's own file and network
    activity, and text in the model's replies are not inspected. Other protocols (OpenAI chat or
    responses, Codex) are not handled at all.
-3. **Shell obfuscation.** Command text is parsed with heuristics, not a shell parser. Variable
+3. **Shell obfuscation.** Command text is parsed with heuristics, not a shell parser. The guard
+   sees tool arguments, not packets: it does not watch DNS, sockets, or bytes on the wire. A
+   destination that never appears in the arguments is not checked. Variable
    expansion, command substitution, base64 or other encodings, globbing, `eval`, here-documents,
    aliases, and scripts the agent writes and then runs can all hide a host or a path. Tokenizing
    is not quote-aware, only `curl` and `wget` option values are understood, and unusual
@@ -186,11 +223,13 @@ internal/rules        YAML policy engine (immutable after load; safe for concurr
 internal/audit        JSONL writer: one writer goroutine owns the file
 internal/telemetry    one OpenTelemetry span per decision
 internal/policy       shared types: Verdict, Decision, Decider, Observer
+internal/halt         halt-file switch; one mutex owns the state
 ```
 
 Shared state has exactly one owner. The policy engine is immutable; the audit file belongs to one
-writer goroutine fed by a bounded channel; the in-flight and connection caps are channel
-semaphores; per-request parsing state belongs to that request's goroutine.
+writer goroutine fed by a bounded channel; the halt switch is one mutex; the in-flight and
+connection caps are channel semaphores; per-request parsing state belongs to that request's
+goroutine.
 
 ## License
 

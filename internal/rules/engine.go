@@ -156,6 +156,9 @@ func (e *Engine) toolDeclared(name string) bool {
 }
 
 func (e *Engine) hostAllowed(h string) bool {
+	if !validHost(h) {
+		return false // a name with stray characters must not match a wildcard suffix
+	}
 	if e.hostsExact[h] {
 		return true
 	}

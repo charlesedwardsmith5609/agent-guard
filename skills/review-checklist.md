@@ -12,6 +12,9 @@ Check, in this order:
 4. Error handling: ignored or swallowed errors, failure paths that leave state inconsistent.
 5. Test gaps: concurrent or failure paths the tests never exercise, tests that can hang, sleeps
    used for synchronization.
+6. Security-review pass: SSRF (deny-by-default outbound hosts; no user-controlled URL fetch),
+   information exposure (secrets in logs, errors, or responses), and secret handling (no secrets
+   in source, prompts, or config; parameterized queries).
 
 Output format:
 
@@ -20,6 +23,12 @@ Output format:
 - If you find nothing meaningful, say "No meaningful issues found" and name the single riskiest
   area you checked.
 - Be concise. No preamble, no summary of what the code does.
+
+## Test quality
+
+- Tests must assert behavior. A test that still passes when the behavior is wrong is not a test.
+- No assertion-free tests. Calling the code and returning, with nothing that can fail, does not count.
+- No tests that only mirror the implementation. Assert an outcome a caller can observe. Do not copy the function body into the test and compare the test to itself.
 
 Language-specific focus:
 - Go: data races, sends on closed channels, double closes, goroutine leaks, missing read or write

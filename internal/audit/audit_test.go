@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -85,6 +86,28 @@ func closeOK(t *testing.T, l *Logger) {
 	defer cancel()
 	if err := l.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRecordControl(t *testing.T) {
+	buf := &lockedBuf{}
+	l := NewWriter(buf, Options{})
+	if err := l.RecordControl(context.Background(), "halt", "halt control is halted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RecordControl(context.Background(), "resume", "halt control is running"); err != nil {
+		t.Fatal(err)
+	}
+	closeOK(t, l)
+	recs := lines(t, buf.String())
+	if len(recs) != 2 {
+		t.Fatalf("got %d lines", len(recs))
+	}
+	if recs[0]["event"] != "halt" || recs[0]["decision"] != "HALT" || recs[0]["rule"] != "halt" {
+		t.Errorf("halt record = %v", recs[0])
+	}
+	if recs[1]["event"] != "resume" || recs[1]["decision"] != "RESUME" {
+		t.Errorf("resume record = %v", recs[1])
 	}
 }
 
@@ -555,19 +578,42 @@ func TestConcurrentObserveLosesNothing(t *testing.T) {
 // Observe racing Close must either record or return an error, never panic.
 func TestObserveRacingClose(t *testing.T) {
 	for i := 0; i < 50; i++ {
-		l := NewWriter(&lockedBuf{}, Options{QueueSize: 16})
+		buf := &lockedBuf{}
+		l := NewWriter(buf, Options{QueueSize: 16})
 		var wg sync.WaitGroup
+		var accepted atomic.Int64
+		first := make(chan struct{}, 4) // each writer signals after its first Observe returns
 		for g := 0; g < 4; g++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for j := 0; j < 20; j++ {
-					l.Observe(context.Background(), ev("T", "1", `{}`, policy.Allow, "allow", ""))
+					if j == 1 {
+						first <- struct{}{}
+					}
+					switch err := l.Observe(context.Background(), ev("T", "1", `{}`, policy.Allow, "allow", "")); {
+					case err == nil:
+						accepted.Add(1)
+					case errors.Is(err, errClosed), errors.Is(err, errFull):
+					default:
+						t.Errorf("Observe returned unexpected error: %v", err)
+					}
 				}
 			}()
 		}
+		<-first // at least one Observe has completed before Close races the rest
 		closeOK(t, l)
 		wg.Wait()
+		if accepted.Load() == 0 {
+			t.Fatalf("iteration %d: no Observe call succeeded", i)
+		}
+		// Every Observe that reported success was written, and nothing else was.
+		if got, want := int64(strings.Count(buf.String(), "\n")), accepted.Load(); got != want {
+			t.Fatalf("iteration %d: %d records written, %d Observe calls succeeded", i, got, want)
+		}
+		if err := l.Observe(context.Background(), ev("T", "1", `{}`, policy.Allow, "allow", "")); !errors.Is(err, errClosed) {
+			t.Fatalf("Observe after Close = %v, want errClosed", err)
+		}
 	}
 }
 

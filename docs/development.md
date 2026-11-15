@@ -15,8 +15,12 @@ go build -o agent-guard ./cmd/agent-guard
 bash scripts/check.sh        # the validation gate
 ```
 
-`scripts/check.sh` runs four stages and reports each: `gofmt`, `go vet`, `govulncheck`, and
-`go test -race -count=1 ./...`. A change is not done until it passes. If govulncheck reports a
+`scripts/check.sh` first scans staged additions with `gitleaks` if it is installed (a match warns;
+`PAIRING_STRICT=1` fails), then runs `scripts/misbehavior-check.sh` and `scripts/assertion-check.sh`
+(heuristics: they warn, and fail under `PAIRING_STRICT=1`; the assertion check needs bash 4.4 or
+newer), then the Go stages `gofmt`, `go vet`, `govulncheck` and `go test -race -count=1 ./...`. It
+reports each stage and ends with `CHECK PASSED` or `CHECK FAILED`. A change is not done until it
+passes. If govulncheck reports a
 vulnerability, report it with the affected call path before changing dependencies or the Go version.
 
 ## Live test against the real API
@@ -42,13 +46,14 @@ what the proxy recorded. It uses the same key file or `ANTHROPIC_API_KEY`.
 |------|----------|
 | `cmd/agent-guard` | `main`: flag parsing (`parseOptions`), wiring (`newServer`), shutdown |
 | `internal/proxy` | `proxy.go` (config, routing, limits, the `decide` step), `nonstream.go`, `stream.go` (SSE parsing and rewriting), `guard.go` (fail-closed wrapper), `listener.go` (connection cap) |
-| `internal/rules` | `config.go` (YAML to `Engine`), `engine.go` (the rules), `extract.go` (hosts and paths), `sensitive.go` (sensitive classes, IPv4 spellings) |
+| `internal/rules` | `config.go` (YAML to `Engine`), `policyset.go` (profiles: picks an engine by agent identity), `engine.go` (the rules), `extract.go` (hosts and paths), `sensitive.go` (sensitive classes, IPv4 spellings) |
+| `internal/halt` | `switch.go` (the halt-file switch), `open_unix.go` / `open_other.go` (safe open) |
 | `internal/audit` | JSONL writer (`audit.go`), redaction (`redact.go`) |
 | `internal/telemetry` | the OpenTelemetry observer and setup |
 | `internal/policy` | shared types: `Verdict`, `Decision`, `ToolCall`, `Decider`, `Event`, `Observer` |
 | `examples/` | the example policy (tests check that it loads) |
 | `plans/`, `REQUIREMENTS.md` | design history; see `plans/README.md` |
-| `scripts/`, `skills/` | the validation gate and the review workflow described below |
+| `scripts/`, `skills/` | the validation gate (`check.sh`, `checks/go.sh`, the two heuristic checks), the review scripts (`plan-review.sh`, `cross-review.sh` and `.ps1`, `review-call.sh`), the live tests, and the review checklists |
 
 ## Conventions
 

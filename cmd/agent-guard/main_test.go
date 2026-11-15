@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -117,7 +118,7 @@ func startApp(t *testing.T, policyYAML, upstream string, extra ...string) *app {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, ln, shutdown, err := newServer(o, nil, a.spans)
+	srv, ln, shutdown, err := newServer(o, slog.New(slog.NewTextHandler(io.Discard, nil)), a.spans)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,4 +413,34 @@ func TestExamplePolicyLoads(t *testing.T) {
 	}
 	srv.Close()
 	shutdown(context.Background())
+}
+
+// Starting against a halted or unreadable control file records the halt before the
+// server accepts a request; starting against "running" writes nothing.
+func TestStartupHaltRecord(t *testing.T) {
+	cases := []struct {
+		name     string
+		control  func(t *testing.T) string
+		wantLine bool
+	}{
+		{"missing file", func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent") }, true},
+		{"halted", func(t *testing.T) string { return writeFile(t, "halt", "halted\n") }, true},
+		{"corrupt", func(t *testing.T) string { return writeFile(t, "halt", "nope") }, true},
+		{"running", func(t *testing.T) string { return writeFile(t, "halt", "running\n") }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := startApp(t, goodPolicy, "http://127.0.0.1:1", "-halt-file", tc.control(t))
+			if err := a.shutdown(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(a.auditLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(b), `"event":"halt"`); got != tc.wantLine {
+				t.Fatalf("halt record present = %v, want %v\n%s", got, tc.wantLine, b)
+			}
+		})
+	}
 }

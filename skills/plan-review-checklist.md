@@ -16,7 +16,9 @@ Check, in this order:
    limits or timeouts that can be defeated (for example by trickling bytes slowly).
 5. Testability: tests that depend on timing or sleeps, negative checks that wait for a timeout
    instead of using a sentinel, important concurrent or failure paths with no test.
-6. Ambiguity: assumptions the human should confirm before code is written.
+6. Test-first: a natural-language test list the human agrees before code, with those tests
+   written failing before implementation. Scaffold, when the human asked for it, is the exception.
+7. Ambiguity: assumptions the human should confirm before code is written.
 
 Output format:
 
