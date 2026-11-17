@@ -64,16 +64,12 @@ func b64u(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(
 //
 //	gone  fragments that must not appear in args_preview
 //	kept  substrings that must still appear (the benign part of the same input)
-//	leaks fragments of gone that appear today. A non-empty leaks marks a known gap: the case
-//	      asserts the leak is still there and that the rest of gone is absent. When redact.go
-//	      starts redacting it, the case fails and tells you to clear leaks.
 type shapeCase struct {
 	group string
 	name  string
 	input string
 	gone  []string
 	kept  []string
-	leaks []string
 }
 
 func (c shapeCase) id() string { return c.group + "/" + c.name }
@@ -86,16 +82,6 @@ func residual(preview string, fragments []string) []string {
 		}
 	}
 	return found
-}
-
-// insideAny reports whether f is one of the leaked fragments or a piece of one.
-func insideAny(f string, leaks []string) bool {
-	for _, l := range leaks {
-		if strings.Contains(l, f) {
-			return true
-		}
-	}
-	return false
 }
 
 func shapeCases() []shapeCase {
@@ -128,6 +114,9 @@ func shapeCases() []shapeCase {
 		short  = gen(alphaLower+"0123456789", 7, 16)
 		apikey = gen(alphaNum, 32, 17)
 		letter = gen(alphaLower, 24, 18)
+		digest = gen(alphaLower, 32, 26)
+		wordA  = gen(alphaLower, 9, 27)
+		wordB  = gen(alphaLower, 9, 28)
 
 		pw      = gen(alphaNum, 16, 19)
 		pwEnc   = gen(alphaNum, 6, 20) + "%40" + gen(alphaNum, 6, 21)
@@ -153,9 +142,9 @@ func shapeCases() []shapeCase {
 		{group: "aws-secret", name: "bare value, no slash (entropy heuristic only)", input: cmdJSON("echo " + flat), gone: frags(flat), kept: []string{"echo"}},
 		{group: "aws-secret", name: "INI form, no slash (entropy heuristic only)", input: cmdJSON("aws_secret_access_key = " + flat), gone: frags(flat), kept: []string{"aws_secret_access_key"}},
 		{group: "aws-secret", name: "NAME: value form, no slash (entropy heuristic only)", input: cmdJSON("AWS_SECRET_ACCESS_KEY: " + flat), gone: frags(flat), kept: []string{"AWS_SECRET_ACCESS_KEY"}},
-		{group: "aws-secret", name: "bare value, slashes in value", input: cmdJSON("echo " + slash), gone: cat([]string{slash}, slashParts), kept: []string{"echo"}, leaks: []string{slash}},
-		{group: "aws-secret", name: "INI form, slashes in value", input: cmdJSON("aws_secret_access_key = " + slash), gone: cat([]string{slash}, slashParts), kept: []string{"aws_secret_access_key"}, leaks: []string{slash}},
-		{group: "aws-secret", name: "NAME: value form, slashes in value", input: cmdJSON("AWS_SECRET_ACCESS_KEY: " + slash), gone: cat([]string{slash}, slashParts), kept: []string{"AWS_SECRET_ACCESS_KEY"}, leaks: []string{slash}},
+		{group: "aws-secret", name: "bare value, slashes in value", input: cmdJSON("echo " + slash), gone: cat([]string{slash}, slashParts), kept: []string{"echo"}},
+		{group: "aws-secret", name: "INI form, slashes in value", input: cmdJSON("aws_secret_access_key = " + slash), gone: cat([]string{slash}, slashParts), kept: []string{"aws_secret_access_key"}},
+		{group: "aws-secret", name: "NAME: value form, slashes in value", input: cmdJSON("AWS_SECRET_ACCESS_KEY: " + slash), gone: cat([]string{slash}, slashParts), kept: []string{"AWS_SECRET_ACCESS_KEY"}},
 
 		// GitHub token prefixes
 		{group: "github-token", name: "ghp_", input: cmdJSON("echo " + ghp), gone: frags(ghp), kept: []string{"echo"}},
@@ -178,8 +167,20 @@ func shapeCases() []shapeCase {
 		{group: "authorization", name: "lower-case bearer", input: cmdJSON("curl -H 'authorization: bearer " + bearer + "' https://api.example.com/v1"), gone: frags(bearer), kept: []string{"api.example.com"}},
 		{group: "authorization", name: "JSON Authorization key, nested", input: objJSON(map[string]any{"headers": map[string]string{"Authorization": "Bearer " + bearer}, "url": "https://api.example.com/v1"}), gone: frags(bearer), kept: []string{"headers", "api.example.com"}},
 		{group: "authorization", name: "ApiKey scheme, mixed token (entropy heuristic only)", input: cmdJSON("curl -H 'Authorization: ApiKey " + apikey + "' https://api.example.com/v1"), gone: frags(apikey), kept: []string{"api.example.com"}},
-		{group: "authorization", name: "Bearer token shorter than 8 characters", input: cmdJSON("curl -H 'Authorization: Bearer " + short + "' https://api.example.com/v1"), gone: []string{short}, kept: []string{"api.example.com"}, leaks: []string{short}},
-		{group: "authorization", name: "Token scheme, letters-only token", input: cmdJSON("curl -H 'Authorization: Token " + letter + "' https://api.example.com/v1"), gone: frags(letter), kept: []string{"api.example.com"}, leaks: []string{letter}},
+		{group: "authorization", name: "Bearer token shorter than 8 characters", input: cmdJSON("curl -H 'Authorization: Bearer " + short + "' https://api.example.com/v1"), gone: []string{short}, kept: []string{"api.example.com"}},
+		{group: "authorization", name: "Token scheme, letters-only token", input: cmdJSON("curl -H 'Authorization: Token " + letter + "' https://api.example.com/v1"), gone: frags(letter), kept: []string{"api.example.com"}},
+
+		{group: "authorization", name: "X-Api-Key header, letters-only token", input: cmdJSON("curl -H 'X-Api-Key: " + letter + "' https://api.example.com/v1"), gone: frags(letter), kept: []string{"X-Api-Key", "api.example.com"}},
+		{group: "authorization", name: "Digest header with embedded quotes", input: cmdJSON(`curl -H "Authorization: Digest username=\"app\", response=\"` + digest + `\"" https://api.example.com/v1`), gone: frags(digest), kept: []string{"api.example.com"}},
+
+		{group: "authorization", name: "quoted header followed by another header", input: cmdJSON("curl -H 'X-Api-Key: " + letter + "' -H 'Accept: json' https://api.example.com/v1"), gone: frags(letter), kept: []string{"-H 'Accept: json' https://api.example.com/v1"}},
+
+		{group: "authorization", name: "header value continued after an escaped newline", input: cmdJSON("curl -H \"Authorization: Bearer \\\n" + letter + "\" https://api.example.com/v1"), gone: frags(letter), kept: []string{"api.example.com"}},
+
+		// Assignments to secret-looking names
+		{group: "assignment", name: "value already redacted by an earlier rule keeps its tail", input: cmdJSON("password=" + redacted + wordA), gone: []string{wordA}},
+		{group: "assignment", name: "quoted value with spaces", input: cmdJSON(`password = "` + wordA + ` ` + wordB + `" ./run`), gone: []string{wordA, wordB}, kept: []string{"password", "./run"}},
+		{group: "assignment", name: "YAML key with a colon", input: objJSON(map[string]string{"content": "db:\n  password: " + wordA + "\n  host: db.internal"}), gone: []string{wordA}, kept: []string{"host: db.internal"}},
 
 		// Database URL with a password
 		{group: "database-url", name: "postgres userinfo", input: cmdJSON("psql postgres://app:" + pw + "@db.internal:5432/prod"), gone: frags(pw), kept: []string{"db.internal:5432/prod"}},
@@ -190,16 +191,20 @@ func shapeCases() []shapeCase {
 		{group: "database-url", name: "JSON key database_url", input: objJSON(map[string]string{"database_url": "postgres://app:" + pw + "@db.internal/prod", "pool": "5"}), gone: frags(pw), kept: []string{"pool"}},
 		{group: "database-url", name: "password in the query string", input: cmdJSON("psql postgresql://db.internal/prod?user=app&password=" + pw), gone: frags(pw), kept: []string{"db.internal/prod?user=app"}},
 		{group: "database-url", name: "keyword DSN", input: cmdJSON("psql 'host=db.internal user=app password=" + pw + " dbname=prod'"), gone: frags(pw), kept: []string{"host=db.internal user=app", "dbname=prod"}},
-		{group: "database-url", name: "empty user, mixed password, long host (caught only because password and host form one 20+ character word, which also hides the host)", input: cmdJSON("redis-cli --url redis://:" + pwRedis + "@cache.internal:6379/0"), gone: frags(pwRedis), kept: []string{"redis-cli"}},
-		{group: "database-url", name: "empty user, mixed password, short host", input: cmdJSON("redis-cli --url redis://:" + pwRedis + "@r:6379/0"), gone: frags(pwRedis), kept: []string{"redis-cli"}, leaks: []string{pwRedis}},
-		{group: "database-url", name: "literal @ in the password", input: cmdJSON("psql postgres://app:" + pwA + "@" + pwB + "@db.internal/prod"), gone: []string{pwA, pwB}, kept: []string{"db.internal/prod"}, leaks: []string{pwB}},
-		{group: "database-url", name: "empty user, letters-only password", input: cmdJSON("redis-cli --url redis://:" + pwWord + "@cache.internal:6379/0"), gone: frags(pwWord), kept: []string{"redis-cli"}, leaks: []string{pwWord}},
+		{group: "database-url", name: "empty user, mixed password, long host", input: cmdJSON("redis-cli --url redis://:" + pwRedis + "@cache.internal:6379/0"), gone: frags(pwRedis), kept: []string{"redis-cli", "cache.internal:6379/0"}},
+		{group: "database-url", name: "empty user, mixed password, short host", input: cmdJSON("redis-cli --url redis://:" + pwRedis + "@r:6379/0"), gone: frags(pwRedis), kept: []string{"redis-cli"}},
+		{group: "database-url", name: "literal @ in the password", input: cmdJSON("psql postgres://app:" + pwA + "@" + pwB + "@db.internal/prod"), gone: []string{pwA, pwB}, kept: []string{"db.internal/prod"}},
+		{group: "database-url", name: "empty user, letters-only password", input: cmdJSON("redis-cli --url redis://:" + pwWord + "@cache.internal:6379/0"), gone: frags(pwWord), kept: []string{"redis-cli"}},
 
 		// Controls: benign text must pass through untouched.
 		{group: "control", name: "plain command", input: cmdJSON("ls -la /home/user/projects/agent-guard"), kept: []string{"ls -la /home/user/projects/agent-guard"}},
 		{group: "control", name: "url without credentials", input: cmdJSON("curl https://api.example.com/v1/status"), kept: []string{"https://api.example.com/v1/status"}},
 		{group: "control", name: "database url without credentials", input: cmdJSON("psql postgres://db.internal:5432/prod"), kept: []string{"postgres://db.internal:5432/prod"}},
 		{group: "control", name: "region assignment", input: cmdJSON("AWS_REGION=us-east-1 aws s3 ls"), kept: []string{"AWS_REGION=us-east-1", "aws s3 ls"}},
+		{group: "control", name: "url with @ in the path and query", input: cmdJSON("curl 'https://example.com/users/@me/profile?next=a@b.example'"), kept: []string{"https://example.com/users/@me/profile?next=a@b.example"}},
+		{group: "control", name: "quoted url followed by an address", input: cmdJSON(`echo "https://example.com" mail me@example.org`), kept: []string{`https://example.com`, "me@example.org"}},
+		{group: "control", name: "Go short variable declaration", input: cmdJSON("key := lookup(id)"), kept: []string{"key := lookup(id)"}},
+		{group: "control", name: "equality comparison", input: cmdJSON("if key == other { return }"), kept: []string{"if key == other { return }"}},
 		{group: "control", name: "prose about headers", input: cmdJSON("echo the Authorization header is required"), kept: []string{"echo the Authorization header is required"}},
 	}
 }
@@ -228,11 +233,7 @@ func TestRedactionShapes(t *testing.T) {
 		t.Fatalf("got %d audit records for %d cases", len(recs), len(cases))
 	}
 	for i, c := range cases {
-		name := c.id()
-		if len(c.leaks) > 0 {
-			name = c.group + "/KNOWN-GAP " + c.name
-		}
-		t.Run(name, func(t *testing.T) {
+		t.Run(c.id(), func(t *testing.T) {
 			got, _ := recs[i]["args_preview"].(string)
 			if got == "" {
 				t.Fatalf("record has no args_preview: %v", recs[i])
@@ -242,25 +243,8 @@ func TestRedactionShapes(t *testing.T) {
 					t.Errorf("preview lost %q: %s", k, got)
 				}
 			}
-			if len(c.leaks) == 0 {
-				for _, f := range residual(got, c.gone) {
-					t.Errorf("preview leaks %q: %s", f, got)
-				}
-				return
-			}
-			for _, f := range c.leaks {
-				if !strings.Contains(got, f) {
-					t.Errorf("now redacted: %q no longer appears in the preview; clear leaks on this case: %s", f, got)
-				}
-			}
-			var rest []string
-			for _, f := range c.gone {
-				if !insideAny(f, c.leaks) {
-					rest = append(rest, f)
-				}
-			}
-			for _, f := range residual(got, rest) {
-				t.Errorf("preview leaks %q beyond the pinned gap: %s", f, got)
+			for _, f := range residual(got, c.gone) {
+				t.Errorf("preview leaks %q: %s", f, got)
 			}
 		})
 	}
@@ -285,5 +269,33 @@ func TestRedactionShapesOracleDetectsLeaks(t *testing.T) {
 		if len(residual(c.input, c.gone)) != len(c.gone) {
 			t.Errorf("%s: oracle did not report every fragment of an unredacted input", c.id())
 		}
+	}
+}
+
+// The bare 40-character pass is exact-length by design. This pins that rule so a change to it is
+// deliberate; it is not a claim that a 39 or 41 character secret is safe (those are caught only
+// by the other rules, and only some of the time).
+func TestBareSecretPassIsExactLength(t *testing.T) {
+	piece := func(n int, seed uint32) string { return gen(alphaNum, n, seed) }
+	mk := func(last int) string { return piece(13, 40) + "/" + piece(7, 41) + "/" + piece(last, 42) }
+	exact := mk(18)
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"40 characters, space-bounded", "echo " + exact + " x", "echo [REDACTED] x"},
+		{"40 characters, after =", "v=" + exact, "v=[REDACTED]"},
+		{"39 characters", "echo " + mk(17) + " x", "echo " + mk(17) + " x"},
+		{"41 characters", "echo " + mk(19) + " x", "echo " + mk(19) + " x"},
+		{"after a dot", "echo f." + exact + " x", "echo f." + exact + " x"},
+		{"followed by a hyphen", "echo " + exact + "- x", "echo " + exact + "- x"},
+		{"after a hyphen", "echo x-" + exact, "echo x-" + exact},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactString(tc.input); got != tc.want {
+				t.Errorf("redactString(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
 	}
 }
