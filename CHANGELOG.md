@@ -26,6 +26,12 @@ and has no tagged releases; everything below is on branch `improve/tldr-catchup-
   credential-swapping proxy, an egress allowlist, an independent judge on another model), and
   evaluates an optional placeholder-token mode for the API key that passes through the proxy.
   It ends with an open question for the maintainer.
+- Table tests for audit redaction by credential shape (`internal/audit/redact_shapes_test.go`):
+  AWS access key id, AWS secret access key, GitHub token prefixes, JWT, `Authorization` header and
+  database URLs with a password. Secret-shaped values are generated at run time. The redactor is
+  unchanged. Eight shapes that are not redacted today are pinned as `KNOWN-GAP` cases, so the
+  tests pass today and fail when a gap is fixed (clear the case's `leaks` then). The list is in the
+  pull request description.
 
 ### Changed
 - The halt control-file read has a 2 second deadline. A read that does not finish counts as
