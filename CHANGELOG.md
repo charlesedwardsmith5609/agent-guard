@@ -21,6 +21,11 @@ and has no tagged releases; everything below is on branch `improve/tldr-catchup-
 - Helper checks `scripts/misbehavior-check.sh` and `scripts/assertion-check.sh`, run by
   `scripts/check.sh`.
 - `DECISIONS.md` and this changelog.
+- [docs/credential-brokering.md](docs/credential-brokering.md): a design note, nothing built. It
+  compares agent-guard with a containment list (read-only ephemeral credentials, a
+  credential-swapping proxy, an egress allowlist, an independent judge on another model), and
+  evaluates an optional placeholder-token mode for the API key that passes through the proxy.
+  It ends with an open question for the maintainer.
 
 ### Changed
 - The halt control-file read has a 2 second deadline. A read that does not finish counts as
