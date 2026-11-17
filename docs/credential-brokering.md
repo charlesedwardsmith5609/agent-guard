@@ -183,19 +183,21 @@ Claude Code's other authentication forms (for example a login token instead of a
 work with a placeholder are not checked here. The live tests in `scripts/live-claude-test.sh`
 use an API key in `ANTHROPIC_API_KEY`; nothing was tried with a placeholder.
 
-## Open question for the maintainer
+## Decision
 
-**Does a placeholder-token mode belong in agent-guard?**
+**Decided 2026-11-16: not now.** A placeholder-token mode does not belong in agent-guard at this
+point. The maintainer agreed with the lean below. Nothing is built, and nothing changes in the
+code or the policy.
 
-A lean, not a decision: **not now.**
+Reasons (from the evaluation above):
 
 1. It protects one credential, the model-API key, that the proxy already sees, while the
    credentials that matter in the AntiFox-style cases are the tools' and are out of reach.
 2. It turns a stateless inspector into a secret holder, and it does that on a listener with no
    authentication, so the proxy becomes the capability it was meant to hide.
 3. The cheaper first step is the prerequisite it needs anyway: authenticate the listener (a unix
-   socket, or a per-agent secret compared in constant time and never logged).
+   socket, or a per-agent secret compared in constant time and never logged). That is a separate
+   suggestion (`plans/step-10.md`) and is not scheduled by this decision.
 
-If the answer is yes, the order would be: listener authentication, then the mode, behind an
-explicit flag and off by default, with the proxy run under a separate account. If the answer is
-no, this note can stand as the record of why. Either way nothing is built until you decide.
+If the question is reopened, the order would be: listener authentication, then the mode, behind
+an explicit flag and off by default, with the proxy run under a separate account.

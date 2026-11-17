@@ -25,7 +25,8 @@ and has no tagged releases; everything below is on branch `improve/tldr-catchup-
   compares agent-guard with a containment list (read-only ephemeral credentials, a
   credential-swapping proxy, an egress allowlist, an independent judge on another model), and
   evaluates an optional placeholder-token mode for the API key that passes through the proxy.
-  It ends with an open question for the maintainer.
+  The question it ends with is answered: a placeholder-token mode is not built for now (see
+  [DECISIONS.md](DECISIONS.md)).
 - Table tests for audit redaction by credential shape (`internal/audit/redact_shapes_test.go`):
   AWS access key id, AWS secret access key, GitHub token prefixes, JWT, `Authorization` header and
   database URLs with a password. Secret-shaped values are generated at run time. The redactor is
