@@ -158,3 +158,20 @@ Not part of the numbered plan above; recorded in [DECISIONS.md](DECISIONS.md) an
 
 - The halt control-file read has a deadline (2 seconds) and fails closed.
 - A request with more than one `X-Agent-Guard-Identity` header is `profile-unknown`.
+
+## Proposed (2026-11-16 TLDR)
+
+Source brief: Shopify's Cyber Chaos Monkey containment list (https://shopify.engineering/cyber-chaos-monkey,
+TLDR InfoSec 2026-11-16) and AntiFox-linked credential theft from application configuration
+(https://thehackernews.com/2026/11/antifox-ai-pentesting-platform-linked.html). Vendor descriptions
+(Shopify, 1Password for Agents, ChatGPT Wallet) are claims, not verified facts. Branch:
+`improve/tldr-2026-11-16`. One commit per item. Standard library only; `go.mod` does not change. Done
+means `bash scripts/check.sh` passes, reported per stage.
+
+| # | Requirement | Plan |
+|---|-------------|------|
+| 26 | Design note, docs only, nothing built: `docs/credential-brokering.md`. Compare agent-guard with the four items on the containment list (read-only ephemeral credentials, a credential-swapping proxy, an egress allowlist, an independent judge agent on a different model). For each, say from the code whether agent-guard has it, partly has it, or leaves it out of scope, with file references. Evaluate an optional placeholder-token mode for the API key that passes through the proxy in transit: what it adds and what it removes. Ask the human whether that mode belongs in this project; do not build it. Every claim about agent-guard cites a file. | `plans/step-11.md` |
+| 27 | Table tests in `internal/audit` for audit redaction over these credential shapes: AWS access key id, AWS secret access key in `KEY=value` form, GitHub token prefixes, a JWT, an `Authorization: Bearer` header, a database URL with a password. Secret-shaped literals are assembled at run time. Report the shapes that are NOT redacted today, in the PR description, and ask before changing `redact.go`. | `plans/step-12.md` |
+
+The one open question is whether a credential-swapping mode belongs here. The note puts it to the
+human and does not decide it.

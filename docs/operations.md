@@ -149,10 +149,18 @@ It never contains request headers, API keys or complete request bodies.
 
 **Redaction is best effort.** It covers secret-looking JSON keys (`key`, `token`, `secret`,
 `password`, `authorization`, `credential`, `cookie`, `bearer`, `auth`), common token formats (OpenAI,
-GitHub, AWS, Slack, JWT, private-key headers), `Basic` and `Bearer` credentials, passwords in URLs,
-`--password x` and similar options, `curl -u`, `NAME_KEY=value` assignments, and long mixed
-letter-and-digit words. It can miss a secret that looks like none of those. Treat the file as
-sensitive.
+GitHub, AWS, Slack, JWT, private-key headers), the value of an `Authorization`,
+`Proxy-Authorization` or `X-Api-Key` header with any scheme and any length, `Basic` and `Bearer`
+credentials, the user and password in a URL (including a password that contains `@` and an empty
+user, as in `redis://:pw@host`), `--password x` and similar options, `curl -u`, `NAME=value`,
+`NAME = value` and `NAME: value` for names that contain `KEY`, `TOKEN`, `SECRET`, `PASSWORD`,
+`PASSWD` or `CREDENTIAL`, a bare 40-character mixed-case base64 string with a digit (the AWS secret key format),
+and long mixed letter-and-digit words. It errs toward hiding too much: prose such as `token: enabled`,
+an unusual 40-character relative path, a `-u` option of any command, and an unquoted header followed
+by more words on the same line are redacted too. It can still miss a secret that looks like none of
+those, for example a bare AWS secret key that starts with `/`, has four or more `/` or has no
+digit, or a short
+bare token with no header or name around it. Treat the file as sensitive.
 
 The file is append-only text. It is opened once and **not rotated** by agent-guard: to rotate,
 stop it, move the file, and start it again (or use a `copytruncate` style tool). It is not

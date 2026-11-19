@@ -21,8 +21,23 @@ and has no tagged releases; everything below is on branch `improve/tldr-catchup-
 - Helper checks `scripts/misbehavior-check.sh` and `scripts/assertion-check.sh`, run by
   `scripts/check.sh`.
 - `DECISIONS.md` and this changelog.
+- [docs/credential-brokering.md](docs/credential-brokering.md): a design note, nothing built. It
+  compares agent-guard with a containment list (read-only ephemeral credentials, a
+  credential-swapping proxy, an egress allowlist, an independent judge on another model), and
+  evaluates an optional placeholder-token mode for the API key that passes through the proxy.
+  The question it ends with is answered: a placeholder-token mode is not built for now (see
+  [DECISIONS.md](DECISIONS.md)).
+- Table tests for audit redaction by credential shape (`internal/audit/redact_shapes_test.go`):
+  AWS access key id, AWS secret access key, GitHub token prefixes, JWT, `Authorization` header and
+  database URLs with a password. Secret-shaped values are generated at run time.
 
 ### Changed
+- Audit redaction closes eight gaps found by the new tests: an AWS secret key containing `/`
+  (bare, `name = value` and `NAME: value` forms); `Authorization`, `Proxy-Authorization` and
+  `X-Api-Key` header values of any scheme and length; a URL password containing `@` and URLs with
+  an empty user (`redis://:pw@host`). Values of secret-looking names may now be quoted and contain
+  spaces. Redaction hides somewhat more harmless text than before; see
+  [docs/operations.md](docs/operations.md#audit-log) for the known costs and limits.
 - The halt control-file read has a 2 second deadline. A read that does not finish counts as
   halted (fail closed), and further checks are refused at once while it is stuck. Keep the file on
   a local filesystem.

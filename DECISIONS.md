@@ -88,3 +88,16 @@ Context: A client (or an intermediary) can send `X-Agent-Guard-Identity` twice. 
 Choice: With `profiles` set, a request with more than one copy of the header is `profile-unknown` (BLOCK) and the audit record has no `agent`. Without `profiles` the header is ignored. This does not make the identity authentication; it is still a label the client sets.
 
 Why: Fail closed on ambiguity. `plans/step-10.md` listed this as a suggestion; it was implemented afterwards.
+
+## 2026-11-16 No placeholder-token (credential-swapping) mode for now
+
+Context: `docs/operations.md` says the agent's API key passes through the proxy unchanged. `docs/credential-brokering.md` evaluated a mode where the agent holds a placeholder and the proxy swaps in the real key when it forwards.
+
+Options:
+
+1. Build the mode.
+2. Do not build it now. Keep the evaluation as the record.
+
+Choice: Option 2, agreed by the maintainer. Nothing was built.
+
+Why: It protects only the model-API key, because the credentials the agent's tools use never pass through this proxy. It would make the proxy a long-lived secret holder behind a listener that has no authentication. Authenticating the listener is the cheaper prerequisite and is not scheduled here.
