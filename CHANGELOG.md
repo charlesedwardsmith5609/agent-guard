@@ -7,6 +7,9 @@ and has no tagged releases; everything below is on branch `improve/tldr-catchup-
 ## [Unreleased] - 2026-11-14
 
 ### Added
+- [docs/audit-integrity.md](docs/audit-integrity.md): a design note, nothing built. It compares a
+  hash chain, signed checkpoints and an off-host sink for the audit log, and ends with an open
+  question about whether any belongs in this repository.
 - `-halt-file`: a control file (`running` or `halted`) read when a request arrives and at the
   start of every tool-call decision. A missing, unreadable, corrupt, symlinked or oversized file
   halts. Halt, resume and each refusal are audit records (`event` field). See
