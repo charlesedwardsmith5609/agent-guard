@@ -1,0 +1,10 @@
+{"ts":"2026-11-17T10:00:00.600Z","tool":"Read","tool_use_id":"toolu_03","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"ci"}
+{"ts":"2026-11-17T10:00:00.100Z","tool":"Bash","tool_use_id":"toolu_01","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"ci"}
+{"ts":"2026-11-17T10:00:00.350Z","tool":"Bash","tool_use_id":"toolu_02","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"ci"}
+{"ts":"2026-11-17T10:00:01Z","tool":"Bash","tool_use_id":"toolu_09","decision":"BLOCK","rule":"profile-missing","reason":"no identity","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":""}
+{"ts":"2026-11-17T10:00:02Z","tool":"halt-control","tool_use_id":"-","decision":"HALT","rule":"halt","reason":"test","args_sha256":"00","latency_ms":0,"stream":false,"profile":"","event":"halt"}
+{"ts":"2026-11-17T10:00:30.000123456Z","tool":"Grep","tool_use_id":"toolu_06","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"dev","agent":"dev-1"}
+{"ts":"2026-11-17T10:00:30.500Z","tool":"Grep","tool_use_id":"toolu_07","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"dev","agent":"dev-1"}
+{"ts":"2026-11-17T10:01:07.500Z","tool":"Write","tool_use_id":"toolu_05","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"ci"}
+{"ts":"2026-11-17T10:01:05Z","tool":"Read","tool_use_id":"toolu_04","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"ci"}
+{"ts":"2026-11-17T10:03:00Z","tool":"Bash","tool_use_id":"toolu_08","decision":"ALLOW","rule":"allowed","reason":"","args_sha256":"00","latency_ms":0.1,"stream":false,"profile":"dev","agent":"dev-1"}

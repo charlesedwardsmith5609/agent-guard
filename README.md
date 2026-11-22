@@ -156,6 +156,7 @@ repository also holds the scripts used to review it: `scripts/plan-review.sh` an
 | [docs/ask-verdict.md](docs/ask-verdict.md) | What Ask does today, the gaps, and a proposed deny-on-timeout for unattended runs |
 | [docs/running-many-agents.md](docs/running-many-agents.md) | One proxy per agent, or one shared proxy with profiles: audit correlation and halt scope |
 | [docs/credential-brokering.md](docs/credential-brokering.md) | Design note (nothing built): where agent-guard sits against a published containment list, and an evaluation of a placeholder-token mode for the API key |
+| [docs/audit-integrity.md](docs/audit-integrity.md) | Design note (nothing built): hash chain, signed checkpoints or an off-host sink for the audit log, what each detects and where its anchor must live |
 | [CHANGELOG.md](CHANGELOG.md) | User-visible changes |
 | [SECURITY.md](SECURITY.md) | Scope and how to report a vulnerability |
 | [examples/policy.yaml](examples/policy.yaml) | A commented starting policy (tested to load) |
@@ -200,12 +201,15 @@ and the usual credential locations.
 6. **Approval.** ASK does not wait for you. The model may retry in another form, and a user or
    harness that approves everything has bypassed the control.
 7. **A compromised machine, proxy host, policy file or audit file.** The audit log is plain
-   append-only text with no integrity protection, and the proxy sees your API key in transit.
+   append-only text with no integrity protection (options are compared in
+   [docs/audit-integrity.md](docs/audit-integrity.md)), and the proxy sees your API key in transit.
    Traffic from the agent to the proxy is plain HTTP on loopback.
    A mode where the proxy holds the real key instead is evaluated, not built, in
    [docs/credential-brokering.md](docs/credential-brokering.md).
 8. **A malicious upstream.** A compromised API endpoint is outside what this tool can defend.
-   Prompt injection is mitigated by blocking its effects, not detected.
+   Prompt injection is mitigated by blocking its effects, not detected. Which
+   Microsoft-style controls are and are not provided is mapped in
+   [docs/policy.md](docs/policy.md#indirect-prompt-injection-what-is-covered).
 9. **Availability.** Failing closed means a broken policy, a full disk or a slow sink blocks the
    agent (each decision waits for its audit write, up to the decision timeout). Resource limits
    are best effort, not a denial-of-service defence.
