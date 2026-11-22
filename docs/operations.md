@@ -185,6 +185,34 @@ jq -r 'select(.rule == "host-not-allowed") | .reason' audit.jsonl | sort | uniq 
 jq -r '[.latency_ms, .tool, .rule] | @tsv' audit.jsonl | sort -rn | head
 ```
 
+### Velocity per profile
+
+How fast does each profile act, and in what order? One output line per profile and field
+(`profile<TAB>field<TAB>value`): `calls`, `per_minute` (UTC minutes that had any call),
+`shortest_gaps_s` (the three smallest gaps between consecutive calls, in seconds, rounded to
+milliseconds) and `order` (tool names in time order, a run of the same tool shown as `Bash x3`).
+Halt, resume and refusal lines (`event` set) are left out, and an empty `profile` is shown as
+`(none)`.
+
+```sh
+jq -rs 'def t: .ts | capture("^(?<s>[^.Z]+)(?<f>[.][0-9]+)?Z$") | ((.s + "Z" | fromdateiso8601) + (("0" + (.f // "")) | tonumber)); [.[] | select(.event == null) | . + {t: t, p: (if (.profile // "") == "" then "(none)" else .profile end)}] | group_by(.p)[] | sort_by(.t) as $r | $r[0].p as $p | "\($p)\tcalls\t\($r | length)", "\($p)\tper_minute\t\($r | group_by(.t | floor | strftime("%Y-%m-%dT%H:%M")) | map("\(.[0].t | floor | strftime("%H:%M")) \(length)") | join(", "))", "\($p)\tshortest_gaps_s\t\([range(1; $r | length) as $i | $r[$i].t - $r[$i-1].t] | sort | .[:3] | map((. * 1000 | round) / 1000) | join(" "))", "\($p)\torder\t\([$r[].tool] | reduce .[] as $x ([]; if .[-1].n == $x then .[:-1] + [{n: $x, c: (.[-1].c + 1)}] else . + [{n: $x, c: 1}] end) | map(if .c > 1 then "\(.n) x\(.c)" else .n end) | join(" > "))"' audit.jsonl
+```
+
+Read it with these limits in mind:
+
+- One model response with several tool calls writes several rows a few milliseconds apart, and the
+  row has no request id to tell that batch from separate turns (fields: `internal/audit/audit.go`
+  lines 28-48). The shortest gaps are therefore often inside one response.
+- `profile` is the policy profile, not the agent. With no `profiles` map every caller is
+  `default` (`DefaultProfile`, `internal/rules/policyset.go` line 11). To group by identity, replace
+  `.profile` with `.agent` in the program; that field is a label, not authentication
+  ([running-many-agents.md](running-many-agents.md#audit-correlation)).
+- Lines are read in file order and sorted by `ts`; file order is not strictly `ts` order.
+- This is a report, not a verdict. agent-guard has no rate rule. Whether it should have one is an
+  open question (it would first need a request id in the record).
+- The recipe is run against `cmd/agent-guard/testdata/velocity-audit.jsonl` by `TestVelocityRecipe`
+  in `cmd/agent-guard/docs_test.go`, which is skipped (loudly) when `jq` is not installed.
+
 ## OpenTelemetry
 
 With `-otel stdout`, each decision produces one span named `agent_guard.decide`, started when the

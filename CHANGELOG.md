@@ -7,6 +7,9 @@ and has no tagged releases; everything below is on branch `improve/tldr-catchup-
 ## [Unreleased] - 2026-11-14
 
 ### Added
+- A jq recipe in [docs/operations.md](docs/operations.md#velocity-per-profile): calls per minute,
+  shortest gaps and tool order per profile, a report with no rate verdict. `TestVelocityRecipe`
+  runs it on a fixture log and is skipped, loudly, when `jq` is not installed.
 - [docs/audit-integrity.md](docs/audit-integrity.md): a design note, nothing built. It compares a
   hash chain, signed checkpoints and an off-host sink for the audit log, and ends with an open
   question about whether any belongs in this repository.

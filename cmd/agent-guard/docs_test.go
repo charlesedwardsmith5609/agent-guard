@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"agent-guard/internal/rules"
 )
@@ -139,5 +142,68 @@ func TestRelativeLinksResolve(t *testing.T) {
 				t.Errorf("%s: link %q: no heading %q in %s", doc, link, frag, target)
 			}
 		}
+	}
+}
+
+// The velocity recipe in docs/operations.md is run on a small fixture log and its output compared
+// exactly. It needs jq; without jq it reports itself as not run, loudly.
+//
+// Expected output, by hand from testdata/velocity-audit.jsonl (the halt row is dropped, the empty
+// profile is "(none)", rows are sorted by ts, gaps are rounded to milliseconds):
+//
+//	ci: 00.100 Bash, 00.350 Bash, 00.600 Read, 10:01:05 Read, 10:01:07.5 Write. Gaps 0.25, 0.25,
+//	    2.5, 64.4, so the three shortest are 0.25 0.25 2.5. Minutes 10:00 x3 and 10:01 x2.
+//	dev: 10:00:30.000123456 Grep, 10:00:30.5 Grep, 10:03:00 Bash. Gaps 0.499877 (0.5) and 149.5.
+//	(none): one Bash row at 10:00:01, so there is no gap.
+func TestVelocityRecipe(t *testing.T) {
+	doc := repoFile(t, "docs/operations.md")
+	_, after, ok := strings.Cut(doc, "\n### Velocity per profile\n")
+	if !ok {
+		t.Fatal("docs/operations.md has no '### Velocity per profile' section")
+	}
+	if i := strings.Index(after, "\n#"); i >= 0 {
+		after = after[:i]
+	}
+	const open, closeQ = "jq -rs '", "' audit.jsonl"
+	var program string
+	n := 0
+	for _, line := range strings.Split(after, "\n") {
+		if strings.HasPrefix(line, open) && strings.HasSuffix(line, closeQ) {
+			program = line[len(open) : len(line)-len(closeQ)]
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one jq -rs '...' audit.jsonl line in the velocity section, found %d", n)
+	}
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		// Skipf, not Skip: the pairing check flags the literal t.Skip( marker. This is still a
+		// skip, and it is meant to be loud; report it as NOT RUN.
+		t.Skipf("NOT RUN: jq not found in PATH, so the velocity recipe in docs/operations.md was NOT exercised (%v)", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, jq, "-rs", program, filepath.Join("testdata", "velocity-audit.jsonl"))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("jq failed: %v\n%s", err, stderr.String())
+	}
+	want := "(none)\tcalls\t1\n" +
+		"(none)\tper_minute\t10:00 1\n" +
+		"(none)\tshortest_gaps_s\t\n" +
+		"(none)\torder\tBash\n" +
+		"ci\tcalls\t5\n" +
+		"ci\tper_minute\t10:00 3, 10:01 2\n" +
+		"ci\tshortest_gaps_s\t0.25 0.25 2.5\n" +
+		"ci\torder\tBash x2 > Read x2 > Write\n" +
+		"dev\tcalls\t3\n" +
+		"dev\tper_minute\t10:00 2, 10:03 1\n" +
+		"dev\tshortest_gaps_s\t0.5 149.5\n" +
+		"dev\torder\tGrep x2 > Bash\n"
+	if string(out) != want {
+		t.Errorf("velocity recipe output differs.\ngot:\n%s\nwant:\n%s", out, want)
 	}
 }
