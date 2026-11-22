@@ -176,6 +176,39 @@ For each `tool_use` block, findings are collected in this order (first equal-ran
 reported is the first one, in the order above, that produced that verdict. So a call that posts
 `~/.ssh/id_rsa` toward a host is BLOCK (`egress:sensitive:ssh`) even if `ssh` alone would only ask.
 
+## Indirect prompt injection: what is covered
+
+Microsoft's guidance on indirect prompt injection recommends combining probabilistic and
+deterministic mitigations (TLDR IT 2026-11-17, citing
+https://learn.microsoft.com/en-us/security/zero-trust/sfi/defend-indirect-prompt-injection; vendor
+guidance, not independently checked). agent-guard provides none of the probabilistic ones. As the
+threat model says, prompt injection is mitigated by blocking its effects, not detected
+([README](../README.md#what-it-does-not-protect-against), item 8).
+
+| Microsoft control | agent-guard |
+|-------------------|-------------|
+| Prompt shields (a classifier over untrusted text) | None. There is no content classifier. Requests are forwarded unchanged except that the identity header is removed |
+| Spotlighting (marking untrusted input inside the prompt) | None. agent-guard does not rewrite prompts |
+| Plan drift detection | None. Each tool call is judged on its own (`Engine.Decide`, `internal/rules/engine.go` line 43); no plan or call history is kept |
+| Information flow control | None in the strict sense. The nearest thing is a per-call check: `egress:canary` and `egress:sensitive:<class>` block a call whose own arguments contain a canary or a sensitive location together with an egress channel (`internal/rules/engine.go` lines 53-75). It does not follow data from one call to the next. Information flow control is out of scope |
+
+What agent-guard does provide is deterministic: a fixed rule decides each call, whatever the
+model was persuaded of. Rule names, as they appear in the audit log:
+
+| Control | Rule | Where |
+|---------|------|-------|
+| Tool allowlist | `tool-not-declared` | `RuleToolNotDeclared`, `internal/rules/engine.go` line 14 |
+| Host allowlist, after the host is canonicalized | `host-not-allowed` | `RuleHostNotAllowed`, engine.go line 15; `canonicalHost`, `internal/rules/extract.go` line 177 |
+| Path scopes (structured path arguments only) | `path-out-of-scope` | `RulePathOutOfScope`, engine.go line 16 |
+| Sensitive locations (credential files, hosts) | `sensitive:<class>` | `rulePrefixSensitive`, engine.go line 19; classes in `internal/rules/sensitive.go` |
+| Sensitive or canary data together with an egress channel | `egress:sensitive:<class>`, `egress:canary` | `rulePrefixEgressSens` line 20 and `RuleEgressCanary` line 18 of engine.go |
+| Agent identity must select a profile | `profile-missing`, `profile-unknown` | `internal/rules/policyset.go` lines 16-17 (`DefaultProfile` is line 11) |
+| Halt file | `halt` | Not in `internal/rules`: set in `internal/proxy/proxy.go` (lines 443 and 448) from the switch in `internal/halt` |
+
+These limits still apply: hosts and paths are found by heuristics in the tool arguments, an
+allowed host can still receive data, and the identity is a label, not authentication (see the
+threat model and [How a call is judged](#how-a-call-is-judged)).
+
 ## Which arguments are checked
 
 agent-guard does not know individual tools. It looks at **every string value** in the tool's input,
