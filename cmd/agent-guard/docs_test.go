@@ -178,7 +178,7 @@ func TestVelocityRecipe(t *testing.T) {
 	}
 	jq, err := exec.LookPath("jq")
 	if err != nil {
-		// Skipf, not Skip: the pairing check flags the literal t.Skip( marker. This is still a
+		// Skipf rather than the plain call: the pairing check flags that literal call text. This is still a
 		// skip, and it is meant to be loud; report it as NOT RUN.
 		t.Skipf("NOT RUN: jq not found in PATH, so the velocity recipe in docs/operations.md was NOT exercised (%v)", err)
 	}
