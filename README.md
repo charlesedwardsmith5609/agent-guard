@@ -207,7 +207,9 @@ and the usual credential locations.
    A mode where the proxy holds the real key instead is evaluated, not built, in
    [docs/credential-brokering.md](docs/credential-brokering.md).
 8. **A malicious upstream.** A compromised API endpoint is outside what this tool can defend.
-   Prompt injection is mitigated by blocking its effects, not detected.
+   Prompt injection is mitigated by blocking its effects, not detected. Which
+   Microsoft-style controls are and are not provided is mapped in
+   [docs/policy.md](docs/policy.md#indirect-prompt-injection-what-is-covered).
 9. **Availability.** Failing closed means a broken policy, a full disk or a slow sink blocks the
    agent (each decision waits for its audit write, up to the decision timeout). Resource limits
    are best effort, not a denial-of-service defence.

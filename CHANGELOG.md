@@ -7,6 +7,10 @@ and has no tagged releases; everything below is on branch `improve/tldr-catchup-
 ## [Unreleased] - 2026-11-14
 
 ### Added
+- [docs/policy.md](docs/policy.md#indirect-prompt-injection-what-is-covered): a table mapping
+  Microsoft's indirect-prompt-injection controls (prompt shields, spotlighting, plan drift
+  detection, information flow control) to agent-guard (none of them), and the deterministic rules
+  it does provide, by rule name.
 - A jq recipe in [docs/operations.md](docs/operations.md#velocity-per-profile): calls per minute,
   shortest gaps and tool order per profile, a report with no rate verdict. `TestVelocityRecipe`
   runs it on a fixture log and is skipped, loudly, when `jq` is not installed.
