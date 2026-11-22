@@ -119,7 +119,7 @@ it should stay that way.
 - Implementation shape: a new package (proposed `internal/replay`) that depends on `internal/rules`
   and the audit `Record` type only; `main.go` dispatches when `os.Args[1] == "replay"`, before the
   server flags are parsed (`parseOptions`, cmd/agent-guard/main.go line 41). Single goroutine, no
-  shared state; the `Policy` is immutable after load (README.md line 225).
+  shared state; the `Policy` is immutable after load (README.md lines 229 and 236).
 - Context per row: `policy.Context{UserText: nil}`; `AgentID` unset, the engine selected by the
   row's `profile` name.
 - Tests (natural language, to be agreed before code):
@@ -150,8 +150,7 @@ it should stay that way.
 
 Correction to step 15 (already committed on `improve/tldr-2026-11-17`, not rewritten): its
 policyset.go citations are wrong. `DefaultProfile` is line 11 (not 370) and `RuleProfileMissing` /
-`RuleProfileUnknown` are lines 16-17 (not 375-376). The implementer of step 15 uses the correct
-lines.
+`RuleProfileUnknown` are lines 16-17 (not 375-376). Step 15 was corrected by follow-up commit f830bf9; nothing was rewritten.
 
 ## Files
 
