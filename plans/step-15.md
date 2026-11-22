@@ -138,7 +138,7 @@ Text next to the recipe (plain, short):
   shortest gaps are often within one response, not between turns. The audit row has no request id
   to tell them apart (fields in audit.go lines 28-48).
 - `profile` is the policy profile, not the agent; with no `profiles` map every caller is `default`
-  (policyset.go line 370). Filter or group on `agent` for the identity label (running-many-agents.md
+  (policyset.go line 11, `DefaultProfile`). Filter or group on `agent` for the identity label (running-many-agents.md
   lines 43-55), which is a label, not authentication.
 - This is a report, not a verdict. agent-guard has no rate rule.
 
@@ -208,7 +208,7 @@ Then the deterministic controls it does provide, with rule names:
   internal/rules/sensitive.go).
 - Sensitive-class and canary egress blocks: `egress:sensitive:<class>` and `egress:canary`
   (engine.go lines 18, 20).
-- Profiles: `profile-missing`, `profile-unknown` (internal/rules/policyset.go lines 375-376).
+- Profiles: `profile-missing`, `profile-unknown` (internal/rules/policyset.go lines 16-17).
 - Halt file: rule `halt`. Note it is **not** in internal/rules: it is set in internal/proxy/proxy.go
   (lines 443, 448) from internal/halt/switch.go. The doc must say where it lives rather than claim
   it is an internal/rules rule.
